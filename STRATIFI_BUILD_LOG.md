@@ -79,6 +79,16 @@ This file tracks the major features added while building StratiFi from the origi
 - Reduced Telegram noise by grouping rejected trade candidates into one compact summary while keeping approved buys as individual alerts.
 - Confirmed public channels can use `@ChannelUsername` style chat IDs when the bot is an admin/member.
 
+### Dashboard And Read Models
+
+- Added `npm run dashboard`.
+- Added a local web dashboard at `http://localhost:8787`.
+- Added `/api/dashboard` and `/api/health`.
+- Added a dashboard read model that composes public-safe performance, shadow, wallet, signal, event, position, and log summaries.
+- Added SQLite read methods for source score summaries, recent signals, recent logs, and shadow performance by category.
+- Fixed public signal serialization so aligned wallet addresses are removed at runtime, not only hidden by TypeScript types.
+- Added a dashboard privacy test to make sure source wallet addresses do not leak into public dashboard JSON.
+
 ## Current Status
 
 StratiFi is still paper trading only. There is no live order placement path enabled.
@@ -94,6 +104,7 @@ The current scanner can:
 - create wallet-alignment signals
 - run risk checks through strategy profiles
 - run shadow-copy backtests against source history and market categories
+- serve a public-safe local dashboard from SQLite read models
 - simulate paper orders and exits
 - report PnL and wallet intelligence through CLI and Telegram
 

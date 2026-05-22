@@ -26,10 +26,23 @@ Add wallets in `config/wallets.json` by setting `enabled` to `true` and replacin
 ```bash
 npm run scan       # one-shot scan, no paper orders
 npm run dev        # continuous paper bot loop
+npm run dashboard  # local StratiFi web dashboard
 npm run performance # local paper PnL report
 npm run test       # unit tests
 npm run typecheck  # TypeScript checks
 ```
+
+## Dashboard
+
+Run:
+
+```bash
+npm run dashboard
+```
+
+Then open `http://localhost:8787`.
+
+The dashboard reads from SQLite and exposes public-safe summaries: paper PnL, source strength bands, recent signals, open paper positions, public agent events, run logs, and shadow-copy performance by category. It does not expose source wallet addresses.
 
 ## Telegram
 

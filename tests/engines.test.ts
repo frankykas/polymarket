@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { unlinkSync } from "node:fs";
 import { BotDatabase } from "../src/db.js";
+import { buildDashboardReadModel } from "../src/dashboard/readModel.js";
 import {
   PaperExecutionEngine,
   applyShadowPerformanceToScore,
@@ -716,6 +717,99 @@ test("public wallet previews do not expose wallet addresses", () => {
   }]);
   assert.equal("address" in previews[0], false);
   assert.equal(previews[0].volumeBand, "HIGH");
+});
+
+test("dashboard read model exposes public-safe summaries", () => {
+  const path = "data/test-dashboard.sqlite";
+  for (const suffix of ["", "-wal", "-shm"]) {
+    try {
+      unlinkSync(`${path}${suffix}`);
+    } catch {
+      // test cleanup is best effort
+    }
+  }
+  const db = new BotDatabase(path);
+  db.saveDiscoveredWallet({
+    address: "0xsecret",
+    score: 82,
+    copyabilityScore: 79,
+    hotScore: 75,
+    categoryConsistencyScore: 70,
+    exitBehaviorScore: 65,
+    sampleConfidence: 0.8,
+    dominantCategory: "crypto",
+    tradeCount: 44,
+    buyCount: 24,
+    sellCount: 20,
+    uniqueMarkets: 12,
+    totalVolume: 12000,
+    avgTradeSize: 272,
+    realizedPnlApprox: 150,
+    profitFactorApprox: 2.1,
+    winRateApprox: 0.62,
+    avgReturnPctApprox: 0.07,
+    maxDrawdownApprox: 0.08,
+    avgHoldMinutesApprox: 90,
+    openPositionCount: 2,
+    openPositionValue: 80,
+    openPositionPnlApprox: 6,
+    resolvedMarkets: 4,
+    resolvedWins: 3,
+    resolvedLosses: 1,
+    resolvedWinRate: 0.75,
+    flags: [],
+    firstSeenAt: 1000,
+    lastSeenAt: 2000
+  });
+  db.saveWalletScore({
+    wallet: "0xsecret",
+    score: 82,
+    copyabilityScore: 79,
+    tradeCount: 44,
+    recentTradeCount: 6,
+    reliability: "HIGH",
+    flags: [],
+    updatedAt: 2000,
+    shadowScoreImpact: 4
+  });
+  db.saveSignal({
+    id: "sig_dash",
+    decision: "TRADE_CANDIDATE",
+    marketId: "m1",
+    tokenId: "yes-token",
+    outcome: "YES",
+    side: "BUY",
+    confidence: 91,
+    limitPrice: 0.56,
+    alignedWallets: ["0xsecret"],
+    reason: "dashboard test signal",
+    createdAt: 3000
+  });
+  db.saveAgentEvent({
+    id: "evt_dash",
+    type: "source.scored",
+    agent: "Signal Agent",
+    visibility: "PUBLIC",
+    message: "Source scored.",
+    payload: { wallet: "0xsecret", score: 82 },
+    createdAt: 4000
+  });
+  db.saveShadowTrades(runShadowBacktest("0xsecret", [{
+    wallet: "0xsecret",
+    marketId: "m1",
+    outcome: "YES",
+    side: "BUY",
+    price: 0.5,
+    size: 10,
+    timestamp: 1000
+  }], [{ ...market, question: "Will Ethereum rally?", slug: "ethereum-rally" }], config, 5000));
+
+  const dashboard = buildDashboardReadModel(db);
+  assert.equal(dashboard.wallets[0]?.sourceStrength, 79);
+  assert.equal(dashboard.signals[0]?.alignedSourceCount, 1);
+  assert.ok(!JSON.stringify(dashboard).includes("0xsecret"));
+  assert.equal(dashboard.shadowCategories[0]?.category, "crypto");
+  db.close();
 });
 
 function sampleSignal(): TradeSignal {

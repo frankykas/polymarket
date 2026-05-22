@@ -251,6 +251,26 @@ export interface PerformanceReport {
   approvedSignals: number;
 }
 
+export interface SourceScoreSummary {
+  totalSources: number;
+  highReliability: number;
+  mediumReliability: number;
+  lowReliability: number;
+  avgScore: number;
+  avgCopyabilityScore: number;
+  avgShadowImpact: number;
+}
+
+export interface ShadowCategorySummary {
+  category: MarketCategory;
+  simulated: number;
+  realized: number;
+  pnl: number;
+  winRate: number;
+  avgReturnPct: number;
+  fallbackRate: number;
+}
+
 export interface ShadowTrade {
   id: string;
   wallet: string;

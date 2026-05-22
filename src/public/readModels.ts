@@ -29,8 +29,9 @@ export function publicWalletPreviews(wallets: DiscoveredWallet[]): PublicWalletP
 }
 
 export function publicSignal(signal: TradeSignal): Omit<TradeSignal, "alignedWallets"> & { alignedSourceCount: number } {
+  const { alignedWallets, ...safeSignal } = signal;
   return {
-    ...signal,
+    ...safeSignal,
     alignedSourceCount: signal.alignedWallets.length
   };
 }

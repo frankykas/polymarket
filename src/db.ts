@@ -13,7 +13,9 @@ import type {
   Position,
   RiskDecision,
   ShadowBacktestReport,
+  ShadowCategorySummary,
   ShadowTrade,
+  SourceScoreSummary,
   TradeSignal,
   TrackedWallet,
   WalletScore,
@@ -645,6 +647,61 @@ export class BotDatabase {
     };
   }
 
+  getSourceScoreSummary(): SourceScoreSummary {
+    const row = this.db.prepare(`
+      SELECT
+        COUNT(*) as total_sources,
+        SUM(CASE WHEN reliability = 'HIGH' THEN 1 ELSE 0 END) as high_reliability,
+        SUM(CASE WHEN reliability = 'MEDIUM' THEN 1 ELSE 0 END) as medium_reliability,
+        SUM(CASE WHEN reliability = 'LOW' THEN 1 ELSE 0 END) as low_reliability,
+        COALESCE(AVG(score), 0) as avg_score,
+        COALESCE(AVG(copyability_score), 0) as avg_copyability_score,
+        COALESCE(AVG(shadow_score_impact), 0) as avg_shadow_impact
+      FROM wallet_scores
+    `).get() as {
+      total_sources: number;
+      high_reliability: number;
+      medium_reliability: number;
+      low_reliability: number;
+      avg_score: number;
+      avg_copyability_score: number;
+      avg_shadow_impact: number;
+    };
+    return {
+      totalSources: Number(row.total_sources ?? 0),
+      highReliability: Number(row.high_reliability ?? 0),
+      mediumReliability: Number(row.medium_reliability ?? 0),
+      lowReliability: Number(row.low_reliability ?? 0),
+      avgScore: Number(row.avg_score ?? 0),
+      avgCopyabilityScore: Number(row.avg_copyability_score ?? 0),
+      avgShadowImpact: Number(row.avg_shadow_impact ?? 0)
+    };
+  }
+
+  getRecentSignals(limit: number): TradeSignal[] {
+    const rows = this.db.prepare(`
+      SELECT * FROM signals
+      ORDER BY created_at DESC
+      LIMIT ?
+    `).all(limit) as unknown as DbSignal[];
+    return rows.map(rowToSignal);
+  }
+
+  getRecentBotLogs(limit: number): Array<{ level: "INFO" | "WARN" | "ERROR"; message: string; payload?: unknown; createdAt: number }> {
+    const rows = this.db.prepare(`
+      SELECT level, message, payload_json, created_at
+      FROM bot_run_logs
+      ORDER BY created_at DESC
+      LIMIT ?
+    `).all(limit) as Array<{ level: "INFO" | "WARN" | "ERROR"; message: string; payload_json: string | null; created_at: number }>;
+    return rows.map((row) => ({
+      level: row.level,
+      message: row.message,
+      payload: row.payload_json ? JSON.parse(row.payload_json) as unknown : undefined,
+      createdAt: row.created_at
+    }));
+  }
+
   private count(table: string): number {
     const row = this.db.prepare(`SELECT COUNT(*) as count FROM ${table}`).get() as { count: number };
     return Number(row.count ?? 0);
@@ -784,6 +841,47 @@ export class BotDatabase {
     };
   }
 
+  getShadowCategorySummaries(): ShadowCategorySummary[] {
+    const rows = this.db.prepare(`
+      SELECT
+        COALESCE(category, 'other') as category,
+        COUNT(*) as simulated,
+        SUM(CASE WHEN exit_reason IN ('source sell after detection', 'resolved market outcome') THEN 1 ELSE 0 END) as realized,
+        COALESCE(SUM(pnl), 0) as pnl,
+        SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END) as wins,
+        SUM(CASE WHEN pnl < 0 THEN 1 ELSE 0 END) as losses,
+        COALESCE(AVG(return_pct), 0) as avg_return_pct,
+        SUM(CASE WHEN exit_reason = 'source price fallback' THEN 1 ELSE 0 END) as fallback
+      FROM shadow_trades
+      WHERE status = 'SIMULATED'
+      GROUP BY COALESCE(category, 'other')
+      ORDER BY pnl DESC
+    `).all() as Array<{
+      category: ShadowCategorySummary["category"];
+      simulated: number;
+      realized: number;
+      pnl: number;
+      wins: number;
+      losses: number;
+      avg_return_pct: number;
+      fallback: number;
+    }>;
+    return rows.map((row) => {
+      const wins = Number(row.wins ?? 0);
+      const losses = Number(row.losses ?? 0);
+      const simulated = Number(row.simulated ?? 0);
+      return {
+        category: row.category,
+        simulated,
+        realized: Number(row.realized ?? 0),
+        pnl: Number(row.pnl ?? 0),
+        winRate: wins + losses > 0 ? wins / (wins + losses) : 0,
+        avgReturnPct: Number(row.avg_return_pct ?? 0),
+        fallbackRate: simulated > 0 ? Number(row.fallback ?? 0) / simulated : 0
+      };
+    });
+  }
+
   private saveSourceScoreSnapshot(score: WalletScore): void {
     this.db.prepare(`
       INSERT INTO source_score_snapshots
@@ -896,6 +994,21 @@ interface DbWalletTrade {
   raw_json: string | null;
 }
 
+interface DbSignal {
+  id: string;
+  decision: TradeSignal["decision"];
+  market_id: string;
+  condition_id: string | null;
+  token_id: string;
+  outcome: string;
+  side: TradeSignal["side"];
+  confidence: number;
+  limit_price: number;
+  aligned_wallets_json: string;
+  reason: string;
+  created_at: number;
+}
+
 interface DbAgentEvent {
   id: string;
   type: string;
@@ -992,6 +1105,23 @@ function rowToWalletTrade(row: DbWalletTrade): WalletTrade {
     size: row.size,
     timestamp: row.timestamp,
     raw: row.raw_json ? JSON.parse(row.raw_json) as unknown : undefined
+  };
+}
+
+function rowToSignal(row: DbSignal): TradeSignal {
+  return {
+    id: row.id,
+    decision: row.decision,
+    marketId: row.market_id,
+    conditionId: row.condition_id ?? undefined,
+    tokenId: row.token_id,
+    outcome: row.outcome,
+    side: row.side,
+    confidence: row.confidence,
+    limitPrice: row.limit_price,
+    alignedWallets: JSON.parse(row.aligned_wallets_json) as string[],
+    reason: row.reason,
+    createdAt: row.created_at
   };
 }
 

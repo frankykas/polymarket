@@ -8,6 +8,7 @@
     "scan": "tsx index.ts scan",
     "shadow": "tsx index.ts shadow",
     "performance": "tsx index.ts performance",
+    "dashboard": "tsx src/dashboard/server.ts",
     "test": "node --import tsx --test tests/*.test.ts",
     "typecheck": "tsc --noEmit"
   },
