@@ -1,7 +1,7 @@
 import { createServer, type ServerResponse } from "node:http";
 import { BotDatabase } from "../db.js";
 import { loadRuntimeEnv } from "../config.js";
-import { buildDashboardReadModel } from "./readModel.js";
+import { buildAdminDashboardReadModel, buildDashboardReadModel } from "./readModel.js";
 
 const env = loadRuntimeEnv();
 const db = new BotDatabase(env.dbPath);
@@ -11,6 +11,10 @@ const server = createServer((request, response) => {
   const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
   if (url.pathname === "/api/dashboard") {
     sendJson(response, buildDashboardReadModel(db));
+    return;
+  }
+  if (url.pathname === "/api/admin/dashboard") {
+    sendJson(response, buildAdminDashboardReadModel(db));
     return;
   }
   if (url.pathname === "/api/health") {
@@ -61,6 +65,8 @@ function indexHtml(): string {
       --muted: #a8b0b8;
       --green: #36d399;
       --teal: #34c6d3;
+      --cyan: #20f0de;
+      --blue: #168fff;
       --amber: #f2b84b;
       --red: #f87171;
       --ink: #0b0d10;
@@ -78,6 +84,8 @@ function indexHtml(): string {
       padding: 28px;
       border-bottom: 1px solid var(--line);
       background:
+        radial-gradient(circle at 18% 12%, rgba(32, 240, 222, 0.28), transparent 28%),
+        radial-gradient(circle at 82% 20%, rgba(22, 143, 255, 0.18), transparent 30%),
         linear-gradient(120deg, rgba(52, 198, 211, 0.16), transparent 42%),
         linear-gradient(90deg, #111316, #171b20);
     }
@@ -115,6 +123,26 @@ function indexHtml(): string {
     .brand-line .teal { color: #19e5d1; }
     .brand-line .blue { color: #168fff; }
     .subtitle { margin: 16px 0 0; color: var(--muted); max-width: 760px; line-height: 1.5; }
+    .nav {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-top: 18px;
+    }
+    .tab {
+      border: 1px solid var(--line);
+      background: rgba(25, 29, 34, 0.74);
+      color: var(--muted);
+      border-radius: 8px;
+      padding: 9px 12px;
+      font: inherit;
+      cursor: pointer;
+    }
+    .tab.active {
+      color: var(--text);
+      border-color: rgba(32, 240, 222, 0.58);
+      background: linear-gradient(135deg, rgba(32, 240, 222, 0.18), rgba(22, 143, 255, 0.13));
+    }
     .status { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
     .pill {
       border: 1px solid var(--line);
@@ -134,17 +162,47 @@ function indexHtml(): string {
       margin-top: -64px;
       margin-bottom: 18px;
     }
-    .metric, .panel {
+    .metric, .panel, .hero-panel {
       background: var(--panel);
       border: 1px solid var(--line);
       border-radius: 8px;
       box-shadow: 0 16px 30px rgba(0, 0, 0, 0.18);
     }
+    .hero-panel {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 1px;
+      overflow: hidden;
+      margin-bottom: 14px;
+      background: var(--line);
+    }
+    .agent-lane {
+      min-height: 128px;
+      padding: 16px;
+      background: linear-gradient(180deg, #1b2026, #171b20);
+      position: relative;
+    }
+    .agent-lane::after {
+      content: "";
+      position: absolute;
+      left: 16px;
+      right: 16px;
+      bottom: 0;
+      height: 3px;
+      background: linear-gradient(90deg, var(--cyan), var(--blue));
+      opacity: 0.8;
+    }
+    .agent-name { font-size: 15px; font-weight: 760; }
+    .agent-role { margin-top: 8px; color: var(--muted); font-size: 13px; line-height: 1.45; }
+    .agent-stat { margin-top: 14px; color: var(--text); font-size: 22px; font-weight: 760; }
     .metric { min-height: 102px; padding: 14px; }
     .label { color: var(--muted); font-size: 12px; text-transform: uppercase; }
     .value { margin-top: 8px; font-size: 27px; font-weight: 740; }
     .delta { margin-top: 8px; color: var(--muted); font-size: 13px; }
     .grid { display: grid; grid-template-columns: 1.15fr 0.85fr; gap: 14px; }
+    .admin-grid { display: none; grid-template-columns: 1.05fr 0.95fr; gap: 14px; }
+    body.admin .public-grid, body.admin .metrics, body.admin .hero-panel { display: none; }
+    body.admin .admin-grid { display: grid; }
     .panel { padding: 16px; min-width: 0; }
     .panel h2 { margin: 0 0 12px; font-size: 16px; }
     table { width: 100%; border-collapse: collapse; table-layout: fixed; }
@@ -163,10 +221,23 @@ function indexHtml(): string {
     .feed { display: grid; gap: 10px; }
     .event { border-left: 3px solid var(--teal); padding: 8px 10px; background: var(--panel-2); border-radius: 6px; }
     .event .meta { color: var(--muted); font-size: 12px; margin-bottom: 3px; }
+    .spark {
+      width: 100%;
+      height: 180px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #11161b;
+    }
+    .address {
+      color: var(--cyan);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 12px;
+    }
+    .wide { grid-column: 1 / -1; }
     .empty { color: var(--muted); padding: 18px 0; }
     @media (max-width: 1120px) {
       .metrics { grid-template-columns: repeat(3, 1fr); margin-top: -44px; }
-      .grid { grid-template-columns: 1fr; }
+      .grid, .admin-grid, .hero-panel { grid-template-columns: 1fr; }
     }
     @media (max-width: 720px) {
       header { padding: 20px; }
@@ -213,6 +284,10 @@ function indexHtml(): string {
           </div>
         </div>
         <p class="subtitle">Paper-trading command center for wallet intelligence, shadow-copy evidence, source quality, and agent decisions.</p>
+        <nav class="nav" aria-label="Dashboard sections">
+          <button class="tab active" data-view="public">Overview</button>
+          <button class="tab" data-view="admin">Admin Intelligence</button>
+        </nav>
       </div>
       <div class="status">
         <span class="pill">Mode <strong id="mode">PAPER</strong></span>
@@ -221,8 +296,9 @@ function indexHtml(): string {
     </div>
   </header>
   <main>
+    <section class="hero-panel" id="agentLanes"></section>
     <section class="metrics" id="metrics"></section>
-    <section class="grid">
+    <section class="grid public-grid">
       <div class="panel">
         <h2>Source Intelligence</h2>
         <table>
@@ -257,6 +333,34 @@ function indexHtml(): string {
         <div class="feed" id="logs"></div>
       </div>
     </section>
+    <section class="admin-grid">
+      <div class="panel wide">
+        <h2>Agent Handoff Trace</h2>
+        <div class="feed" id="handoffTrace"></div>
+      </div>
+      <div class="panel">
+        <h2>Admin Source Wallets</h2>
+        <table>
+          <thead><tr><th>Wallet</th><th>Category</th><th class="num">Score</th><th class="num">Trades</th><th>Flags</th></tr></thead>
+          <tbody id="adminWallets"></tbody>
+        </table>
+      </div>
+      <div class="panel">
+        <h2>Source Score Drift</h2>
+        <canvas class="spark" id="scoreDrift" width="740" height="260"></canvas>
+      </div>
+      <div class="panel">
+        <h2>Wallet Score Table</h2>
+        <table>
+          <thead><tr><th>Wallet</th><th class="num">Score</th><th>Rel</th><th class="num">Shadow</th><th>Category</th></tr></thead>
+          <tbody id="walletScores"></tbody>
+        </table>
+      </div>
+      <div class="panel">
+        <h2>Risk Decisions</h2>
+        <div class="feed" id="riskSummary"></div>
+      </div>
+    </section>
   </main>
   <script>
     const fmtUsd = new Intl.NumberFormat(undefined, { style: "currency", currency: "USD", maximumFractionDigits: 2 });
@@ -264,14 +368,19 @@ function indexHtml(): string {
     const fmtNum = new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 });
 
     async function loadDashboard() {
-      const response = await fetch("/api/dashboard", { cache: "no-store" });
-      const data = await response.json();
-      render(data);
+      const [publicResponse, adminResponse] = await Promise.all([
+        fetch("/api/dashboard", { cache: "no-store" }),
+        fetch("/api/admin/dashboard", { cache: "no-store" })
+      ]);
+      const data = await publicResponse.json();
+      const admin = await adminResponse.json();
+      render(data, admin);
     }
 
-    function render(data) {
+    function render(data, admin) {
       text("mode", data.mode);
       text("updated", new Date(data.generatedAt).toLocaleTimeString());
+      renderAgentLanes(data, admin);
       renderMetrics(data);
       renderWallets(data.wallets);
       renderShadowCategories(data.shadowCategories);
@@ -279,6 +388,28 @@ function indexHtml(): string {
       renderPositions(data.positions);
       renderEvents(data.events);
       renderLogs(data.logs);
+      renderAdmin(admin);
+    }
+
+    document.querySelectorAll(".tab").forEach((button) => {
+      button.addEventListener("click", () => {
+        document.querySelectorAll(".tab").forEach((item) => item.classList.remove("active"));
+        button.classList.add("active");
+        document.body.classList.toggle("admin", button.dataset.view === "admin");
+      });
+    });
+
+    function renderAgentLanes(data, admin) {
+      const lanes = [
+        ["Signal Agent", "Discovers markets, scores source wallets, and creates trade candidates.", data.signals.length + " recent signals"],
+        ["Risk Mitigation Agent", "Approves, rejects, or resizes candidates using profile-aware risk gates.", admin.risk.length + " risk reason groups"],
+        ["Overseer Agent", "Monitors paper positions, exits, PnL, and operating state.", data.positions.length + " open positions"]
+      ];
+      byId("agentLanes").replaceChildren(...lanes.map(([name, role, stat]) => {
+        const el = node("div", "agent-lane");
+        el.append(node("div", "agent-name", name), node("div", "agent-role", role), node("div", "agent-stat", stat));
+        return el;
+      }));
     }
 
     function renderMetrics(data) {
@@ -376,6 +507,109 @@ function indexHtml(): string {
       }));
     }
 
+    function renderAdmin(admin) {
+      renderAdminWallets(admin.wallets);
+      renderWalletScores(admin.walletScores);
+      renderRiskSummary(admin.risk);
+      renderHandoffTrace(admin.handoffTrace);
+      renderScoreDrift(admin.scoreHistory);
+    }
+
+    function renderAdminWallets(wallets) {
+      const body = byId("adminWallets");
+      if (!wallets.length) return emptyTable(body, 5, "No admin wallet data yet.");
+      body.replaceChildren(...wallets.slice(0, 12).map((wallet) => tr([
+        address(wallet.address),
+        wallet.category,
+        num(wallet.score),
+        num(wallet.tradeCount),
+        wallet.flags.slice(0, 2).join(", ") || "clean"
+      ])));
+    }
+
+    function renderWalletScores(scores) {
+      const body = byId("walletScores");
+      if (!scores.length) return emptyTable(body, 5, "No wallet scores yet.");
+      body.replaceChildren(...scores.slice(0, 12).map((score) => tr([
+        address(score.wallet),
+        num(score.score),
+        score.reliability,
+        num(score.shadowScoreImpact ?? 0, (score.shadowScoreImpact ?? 0) >= 0 ? "good" : "bad"),
+        score.category || "other"
+      ])));
+    }
+
+    function renderRiskSummary(risk) {
+      const root = byId("riskSummary");
+      if (!risk.length) return root.replaceChildren(node("div", "empty", "No risk decisions stored yet."));
+      root.replaceChildren(...risk.slice(0, 8).map((item) => {
+        const el = node("div", "event");
+        el.style.borderLeftColor = item.decision === "APPROVE" ? "var(--green)" : item.decision === "REDUCE_SIZE" ? "var(--amber)" : "var(--red)";
+        el.append(node("div", "meta", item.decision + " / " + item.count + "x / " + new Date(item.latestAt).toLocaleString()), node("div", "", item.reason));
+        return el;
+      }));
+    }
+
+    function renderHandoffTrace(events) {
+      const root = byId("handoffTrace");
+      if (!events.length) return root.replaceChildren(node("div", "empty", "No agent handoff events yet."));
+      root.replaceChildren(...events.slice(0, 16).map((event) => {
+        const el = node("div", "event");
+        const color = event.agent === "Signal Agent" ? "var(--cyan)" : event.agent === "Risk Mitigation Agent" ? "var(--amber)" : "var(--blue)";
+        el.style.borderLeftColor = color;
+        el.append(node("div", "meta", event.agent + " / " + event.type + " / " + event.visibility + " / " + new Date(event.createdAt).toLocaleString()), node("div", "", event.message));
+        return el;
+      }));
+    }
+
+    function renderScoreDrift(history) {
+      const canvas = byId("scoreDrift");
+      const ctx = canvas.getContext("2d");
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = "#11161b";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      const points = [...history].reverse().slice(-60);
+      drawGrid(ctx, canvas);
+      if (!points.length) {
+        ctx.fillStyle = "#a8b0b8";
+        ctx.fillText("No score history yet.", 24, 36);
+        return;
+      }
+      drawLine(ctx, canvas, points.map((point) => point.score), "#20f0de");
+      drawLine(ctx, canvas, points.map((point) => point.copyabilityScore ?? point.score), "#168fff");
+      ctx.fillStyle = "#f4f1e8";
+      ctx.fillText("Score", 22, 24);
+      ctx.fillStyle = "#168fff";
+      ctx.fillText("Copyability", 82, 24);
+    }
+
+    function drawGrid(ctx, canvas) {
+      ctx.strokeStyle = "#26313a";
+      ctx.lineWidth = 1;
+      for (let y = 40; y < canvas.height; y += 44) {
+        ctx.beginPath();
+        ctx.moveTo(20, y);
+        ctx.lineTo(canvas.width - 20, y);
+        ctx.stroke();
+      }
+    }
+
+    function drawLine(ctx, canvas, values, color) {
+      const min = 0;
+      const max = 100;
+      const pad = 22;
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      values.forEach((value, index) => {
+        const x = pad + (values.length === 1 ? 0 : index / (values.length - 1) * (canvas.width - pad * 2));
+        const y = canvas.height - pad - ((value - min) / (max - min)) * (canvas.height - pad * 2);
+        if (index === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      });
+      ctx.stroke();
+    }
+
     function emptyTable(body, cols, message) {
       const row = document.createElement("tr");
       const cell = document.createElement("td");
@@ -392,6 +626,9 @@ function indexHtml(): string {
         if (value && typeof value === "object" && value.kind === "num") {
           const cell = node("td", "num " + (value.tone || ""), value.value);
           row.append(cell);
+        } else if (value && typeof value === "object" && value.kind === "address") {
+          const cell = node("td", "address", value.value);
+          row.append(cell);
         } else {
           row.append(node("td", "", String(value)));
         }
@@ -400,6 +637,7 @@ function indexHtml(): string {
     }
 
     function num(value, tone = "") { return { kind: "num", value: String(value), tone }; }
+    function address(value) { return { kind: "address", value: String(value) }; }
     function text(id, value) { byId(id).textContent = value; }
     function byId(id) { return document.getElementById(id); }
     function node(tag, className = "", value = "") {

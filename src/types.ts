@@ -271,6 +271,34 @@ export interface ShadowCategorySummary {
   fallbackRate: number;
 }
 
+export interface SourceScorePoint {
+  wallet: string;
+  score: number;
+  copyabilityScore?: number;
+  categoryConsistencyScore?: number;
+  shadowScoreImpact?: number;
+  tradeCount: number;
+  reliability: WalletScore["reliability"];
+  createdAt: number;
+}
+
+export interface AgentHandoffTrace {
+  id: string;
+  type: string;
+  agent: AgentName;
+  visibility: EventVisibility;
+  message: string;
+  payload?: unknown;
+  createdAt: number;
+}
+
+export interface RiskEventSummary {
+  decision: RiskDecision["decision"];
+  reason: string;
+  count: number;
+  latestAt: number;
+}
+
 export interface ShadowTrade {
   id: string;
   wallet: string;

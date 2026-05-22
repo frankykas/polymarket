@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { unlinkSync } from "node:fs";
 import { BotDatabase } from "../src/db.js";
-import { buildDashboardReadModel } from "../src/dashboard/readModel.js";
+import { buildAdminDashboardReadModel, buildDashboardReadModel } from "../src/dashboard/readModel.js";
 import {
   PaperExecutionEngine,
   applyShadowPerformanceToScore,
@@ -805,10 +805,14 @@ test("dashboard read model exposes public-safe summaries", () => {
   }], [{ ...market, question: "Will Ethereum rally?", slug: "ethereum-rally" }], config, 5000));
 
   const dashboard = buildDashboardReadModel(db);
+  const admin = buildAdminDashboardReadModel(db);
   assert.equal(dashboard.wallets[0]?.sourceStrength, 79);
   assert.equal(dashboard.signals[0]?.alignedSourceCount, 1);
   assert.ok(!JSON.stringify(dashboard).includes("0xsecret"));
   assert.equal(dashboard.shadowCategories[0]?.category, "crypto");
+  assert.ok(JSON.stringify(admin).includes("0xsecret"));
+  assert.equal(admin.walletScores[0]?.score, 82);
+  assert.ok(admin.scoreHistory.length > 0);
   db.close();
 });
 

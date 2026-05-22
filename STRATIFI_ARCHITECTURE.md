@@ -76,7 +76,11 @@ Read model helpers live in:
 - `src/public/readModels.ts`
 - `src/admin/readModels.ts`
 
-The local dashboard builds from `src/dashboard/readModel.ts` and serves through `src/dashboard/server.ts`. The browser uses `/api/dashboard`, which is intentionally public-safe: source wallet addresses and raw private payload fields are scrubbed before display.
+The local dashboard builds from `src/dashboard/readModel.ts` and serves through `src/dashboard/server.ts`.
+
+Dashboard endpoints:
+- `/api/dashboard` is public-safe: source wallet addresses and raw private payload fields are scrubbed before display.
+- `/api/admin/dashboard` is local-operator focused: exact source wallets, score history, risk summaries, and agent handoff trace are available for debugging and tuning.
 
 ## Event Ledger
 
@@ -136,6 +140,6 @@ This gives us the foundation for the transparency dashboard, Telegram summaries,
 1. Pull deeper paginated source history for top candidates.
 2. Add resolved-market lookup/backfill for older markets not present in active scans.
 3. Split Telegram into private admin commands and public alert-only mode.
-4. Add admin-only dashboard views for exact source addresses and deeper score history.
-5. Add dashboard charts for source score drift and category shadow-copy drift.
+4. Add authentication before exposing admin views beyond localhost.
+5. Add deeper dashboard charts for category shadow-copy drift and per-agent throughput.
 6. Add live-trading interfaces only after paper trading has enough forward performance data.

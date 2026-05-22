@@ -84,10 +84,13 @@ This file tracks the major features added while building StratiFi from the origi
 - Added `npm run dashboard`.
 - Added a local web dashboard at `http://localhost:8787`.
 - Added `/api/dashboard` and `/api/health`.
+- Added `/api/admin/dashboard`.
 - Added a dashboard read model that composes public-safe performance, shadow, wallet, signal, event, position, and log summaries.
+- Added an admin read model with exact source wallets, wallet score table, source score drift, risk decision groups, and agent handoff trace.
 - Added SQLite read methods for source score summaries, recent signals, recent logs, and shadow performance by category.
 - Fixed public signal serialization so aligned wallet addresses are removed at runtime, not only hidden by TypeScript types.
 - Added a dashboard privacy test to make sure source wallet addresses do not leak into public dashboard JSON.
+- Upgraded the dashboard UI with StratiFi branding, agent lanes, Overview/Admin Intelligence tabs, score drift chart, and richer operating tables.
 
 ## Current Status
 

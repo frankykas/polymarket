@@ -12,9 +12,11 @@ import type {
   PerformanceReport,
   Position,
   RiskDecision,
+  RiskEventSummary,
   ShadowBacktestReport,
   ShadowCategorySummary,
   ShadowTrade,
+  SourceScorePoint,
   SourceScoreSummary,
   TradeSignal,
   TrackedWallet,
@@ -702,6 +704,65 @@ export class BotDatabase {
     }));
   }
 
+  getTopWalletScores(limit: number): WalletScore[] {
+    const rows = this.db.prepare(`
+      SELECT * FROM wallet_scores
+      ORDER BY score DESC, copyability_score DESC, updated_at DESC
+      LIMIT ?
+    `).all(limit) as unknown as DbWalletScore[];
+    return rows.map(rowToWalletScore);
+  }
+
+  getSourceScoreHistory(limit: number): SourceScorePoint[] {
+    const rows = this.db.prepare(`
+      SELECT wallet, score, copyability_score, category_consistency_score, shadow_score_impact,
+             trade_count, reliability, created_at
+      FROM source_score_snapshots
+      ORDER BY created_at DESC
+      LIMIT ?
+    `).all(limit) as Array<{
+      wallet: string;
+      score: number;
+      copyability_score: number | null;
+      category_consistency_score: number | null;
+      shadow_score_impact: number | null;
+      trade_count: number;
+      reliability: WalletScore["reliability"];
+      created_at: number;
+    }>;
+    return rows.map((row) => ({
+      wallet: row.wallet,
+      score: row.score,
+      copyabilityScore: row.copyability_score ?? undefined,
+      categoryConsistencyScore: row.category_consistency_score ?? undefined,
+      shadowScoreImpact: row.shadow_score_impact ?? undefined,
+      tradeCount: row.trade_count,
+      reliability: row.reliability,
+      createdAt: row.created_at
+    }));
+  }
+
+  getRiskEventSummary(limit: number): RiskEventSummary[] {
+    const rows = this.db.prepare(`
+      SELECT decision, reason, COUNT(*) as count, MAX(created_at) as latest_at
+      FROM risk_events
+      GROUP BY decision, reason
+      ORDER BY latest_at DESC
+      LIMIT ?
+    `).all(limit) as Array<{
+      decision: RiskDecision["decision"];
+      reason: string;
+      count: number;
+      latest_at: number;
+    }>;
+    return rows.map((row) => ({
+      decision: row.decision,
+      reason: row.reason,
+      count: Number(row.count ?? 0),
+      latestAt: Number(row.latest_at ?? 0)
+    }));
+  }
+
   private count(table: string): number {
     const row = this.db.prepare(`SELECT COUNT(*) as count FROM ${table}`).get() as { count: number };
     return Number(row.count ?? 0);
@@ -981,6 +1042,33 @@ interface DbDiscoveredWallet {
   last_seen_at: number;
 }
 
+interface DbWalletScore {
+  wallet: string;
+  label: string | null;
+  score: number;
+  copyability_score: number | null;
+  hot_score: number | null;
+  category_consistency_score: number | null;
+  sample_confidence: number | null;
+  dominant_category: WalletScore["dominantCategory"] | null;
+  resolved_markets: number | null;
+  resolved_wins: number | null;
+  resolved_losses: number | null;
+  resolved_win_rate: number | null;
+  shadow_trade_count: number | null;
+  shadow_simulated: number | null;
+  shadow_realized: number | null;
+  shadow_pnl: number | null;
+  shadow_avg_return_pct: number | null;
+  shadow_win_rate: number | null;
+  shadow_score_impact: number | null;
+  trade_count: number;
+  recent_trade_count: number;
+  reliability: WalletScore["reliability"];
+  flags_json: string;
+  updated_at: number;
+}
+
 interface DbWalletTrade {
   wallet: string;
   market_id: string;
@@ -1090,6 +1178,35 @@ function rowToDiscoveredWallet(row: DbDiscoveredWallet): DiscoveredWallet {
     flags: JSON.parse(row.flags_json) as string[],
     firstSeenAt: row.first_seen_at,
     lastSeenAt: row.last_seen_at
+  };
+}
+
+function rowToWalletScore(row: DbWalletScore): WalletScore {
+  return {
+    wallet: row.wallet,
+    label: row.label ?? undefined,
+    score: row.score,
+    copyabilityScore: row.copyability_score ?? undefined,
+    hotScore: row.hot_score ?? undefined,
+    categoryConsistencyScore: row.category_consistency_score ?? undefined,
+    sampleConfidence: row.sample_confidence ?? undefined,
+    dominantCategory: row.dominant_category ?? undefined,
+    resolvedMarkets: row.resolved_markets ?? undefined,
+    resolvedWins: row.resolved_wins ?? undefined,
+    resolvedLosses: row.resolved_losses ?? undefined,
+    resolvedWinRate: row.resolved_win_rate ?? undefined,
+    shadowTradeCount: row.shadow_trade_count ?? undefined,
+    shadowSimulated: row.shadow_simulated ?? undefined,
+    shadowRealized: row.shadow_realized ?? undefined,
+    shadowPnl: row.shadow_pnl ?? undefined,
+    shadowAvgReturnPct: row.shadow_avg_return_pct ?? undefined,
+    shadowWinRate: row.shadow_win_rate ?? undefined,
+    shadowScoreImpact: row.shadow_score_impact ?? undefined,
+    tradeCount: row.trade_count,
+    recentTradeCount: row.recent_trade_count,
+    reliability: row.reliability,
+    flags: JSON.parse(row.flags_json) as string[],
+    updatedAt: row.updated_at
   };
 }
 
