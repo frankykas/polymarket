@@ -1,19 +1,19 @@
 import { ClobMarketWebSocket, makeClients } from "./src/clients.js";
 import { loadBotConfig, loadRuntimeEnv, loadTrackedWallets } from "./src/config.js";
 import { BotDatabase } from "./src/db.js";
+import { OverseerAgent } from "./src/agents/overseerAgent.js";
+import { RiskMitigationAgent } from "./src/agents/riskMitigationAgent.js";
+import { SignalAgent } from "./src/agents/signalAgent.js";
 import {
   PaperExecutionEngine,
-  decideExit,
-  decideRisk,
-  discoverWallets,
   evaluateMarketQuality,
-  generateSignals,
-  scoreDiscoveredWallet,
-  scoreWallet,
   type RiskState
 } from "./src/engines.js";
+import { AgentEventWriter } from "./src/events/eventWriter.js";
+import { buildStrategyProfiles } from "./src/profiles/profiles.js";
+import { PolymarketProvider } from "./src/providers/polymarketProvider.js";
 import { TelegramAlerts } from "./src/telegram.js";
-import type { MarketSnapshot, OrderBookSnapshot, PaperOrder, WalletScore, WalletTrade } from "./src/types.js";
+import type { MarketSnapshot, OrderBookSnapshot, PaperOrder, WalletScore } from "./src/types.js";
 
 type Mode = "dev" | "scan" | "performance";
 
@@ -32,7 +32,13 @@ class PolymarketPaperBot {
   private config = loadBotConfig();
   private wallets = loadTrackedWallets();
   private clients = makeClients(this.env);
+  private provider = new PolymarketProvider(this.clients);
   private db = new BotDatabase(this.env.dbPath);
+  private events = new AgentEventWriter(this.db);
+  private profiles = buildStrategyProfiles(this.config);
+  private signalAgent = new SignalAgent(this.provider, this.db, this.events, this.config);
+  private riskAgent = new RiskMitigationAgent(this.db, this.events, this.config, this.profiles);
+  private overseerAgent = new OverseerAgent(this.db, this.events, this.config);
   private telegram = new TelegramAlerts(this.env);
   private executor = new PaperExecutionEngine();
   private orderBooks = new Map<string, OrderBookSnapshot>();
@@ -97,50 +103,26 @@ class PolymarketPaperBot {
     const result: CycleResult = { markets: [], scores: [], discovered: 0, discoveryTrades: 0, signals: 0, approved: 0, rejected: 0 };
     try {
       this.db.log("INFO", "cycle started", { placePaperOrders: options.placePaperOrders });
-      const markets = await this.clients.gamma.getMarkets(this.config.marketScanLimit);
-      const watchedMarkets = markets.slice(0, this.config.maxWatchedMarkets);
-      result.markets = watchedMarkets;
-      for (const market of watchedMarkets) this.db.saveMarket(market);
-      if (options.placePaperOrders) this.ws.connect(watchedMarkets.flatMap((market) => market.clobTokenIds));
+      const signalState = await this.signalAgent.discoverAndScore(this.wallets);
+      result.markets = signalState.markets;
+      result.discoveryTrades = signalState.discoveryTrades;
+      result.discovered = signalState.discovered;
+      result.scores = signalState.scores;
+      if (options.placePaperOrders) this.ws.connect(signalState.markets.flatMap((market) => market.clobTokenIds));
 
-      const discoveryTrades = this.config.discoveryEnabled ? await this.fetchDiscoveryTrades(watchedMarkets) : [];
-      result.discoveryTrades = discoveryTrades.length;
-      const walletPreviewPositions = this.config.discoveryEnabled ? await this.fetchPositionPreviews(discoveryTrades) : [];
-      const discovered = this.config.discoveryEnabled ? discoverWallets(discoveryTrades, this.config, Date.now(), walletPreviewPositions) : [];
-      for (const wallet of discovered) this.db.saveDiscoveredWallet(wallet);
-      result.discovered = discovered.length;
-
-      const discoveredScores = this.config.autoTrackDiscoveredWallets
-        ? discovered.map((wallet) => scoreDiscoveredWallet(wallet)).filter((score) => score.score >= this.config.minWalletScore)
-        : [];
-      const trackedWallets = [...this.wallets];
-      for (const wallet of discoveredScores) {
-        if (!trackedWallets.some((tracked) => tracked.address === wallet.wallet)) {
-          trackedWallets.push({ address: wallet.wallet, label: "discovered", enabled: true });
-        }
-      }
-      this.db.syncWallets(trackedWallets);
-
-      const walletTrades = await this.fetchWalletTrades(trackedWallets);
-      const configuredScores = this.wallets.map((wallet) => scoreWallet(wallet, walletTrades.get(wallet.address) ?? []));
-      const scores = mergeScores(configuredScores, discoveredScores);
-      for (const score of scores) this.db.saveWalletScore(score);
-      result.scores = scores;
-
-      const allTrades = [...walletTrades.values()].flat();
-      for (const trade of discoveryTrades) {
-        if (scores.some((score) => score.wallet === trade.wallet)) allTrades.push(trade);
-      }
-      for (const market of watchedMarkets) {
+      for (const market of signalState.markets) {
         const books = await this.getBooksForMarket(market);
         const quality = evaluateMarketQuality(market, books, this.config);
-        const marketSignals = generateSignals(market, books, allTrades, scores, this.config);
+        const marketSignals = this.signalAgent.createSignals({
+          market,
+          books,
+          trades: signalState.allTrades,
+          scores: signalState.scores
+        });
         result.signals += marketSignals.length;
 
         for (const signal of marketSignals) {
-          this.db.saveSignal(signal);
-          const risk = decideRisk(signal, quality, this.riskState(), this.config);
-          this.db.saveRiskDecision(risk);
+          const risk = this.riskAgent.decide(signal, quality, this.riskState());
           if (risk.decision === "APPROVE" || risk.decision === "REDUCE_SIZE") {
             result.approved += 1;
             await this.telegram.sendApproved({
@@ -171,25 +153,6 @@ class PolymarketPaperBot {
     }
   }
 
-  private async fetchWalletTrades(wallets = this.wallets): Promise<Map<string, WalletTrade[]>> {
-    const trades = new Map<string, WalletTrade[]>();
-    for (const wallet of wallets) {
-      const walletTrades = await this.clients.data.getWalletTrades(wallet.address, this.config.walletActivityLimit);
-      trades.set(wallet.address, walletTrades);
-    }
-    return trades;
-  }
-
-  private async fetchDiscoveryTrades(markets: MarketSnapshot[]): Promise<WalletTrade[]> {
-    const trades: WalletTrade[] = [];
-    const discoveryMarkets = markets.slice(0, this.config.discoveryMarketLimit);
-    for (const market of discoveryMarkets) {
-      const marketTrades = await this.clients.data.getMarketTrades(market.conditionId ?? market.id, this.config.discoveryTradesPerMarket);
-      trades.push(...marketTrades);
-    }
-    return trades;
-  }
-
   private async getBooksForMarket(market: MarketSnapshot): Promise<OrderBookSnapshot[]> {
     const books: OrderBookSnapshot[] = [];
     for (const tokenId of market.clobTokenIds) {
@@ -198,7 +161,7 @@ class PolymarketPaperBot {
         books.push(cached);
         continue;
       }
-      const book = await this.clients.clob.getOrderBook(tokenId, market.id);
+      const book = await this.provider.getOrderBook(tokenId, market.id);
       if (book) {
         this.orderBooks.set(tokenId, book);
         this.db.saveOrderBook(book);
@@ -220,27 +183,12 @@ class PolymarketPaperBot {
   }
 
   private monitorOpenPositions(): void {
-    for (const position of this.db.getOpenPositions()) {
-      const book = this.orderBooks.get(position.tokenId);
-      if (!book) continue;
-      const exit = decideExit(position, book, this.config);
-      this.db.saveExitDecision(position.id, exit);
-      if (exit.decision === "FULL_EXIT") {
-        const currentPrice = book.bestBid ?? position.currentPrice;
-        this.db.savePosition({
-          ...position,
-          currentPrice,
-          realizedPnl: (currentPrice - position.avgEntryPrice) * position.size,
-          updatedAt: Date.now(),
-          status: "CLOSED"
-        });
-        void this.telegram.sendExit({ outcome: position.outcome, marketId: position.marketId, reason: exit.reason });
-      } else {
-        const currentPrice = book.bestBid ?? book.lastTradePrice ?? position.currentPrice;
-        this.db.savePosition({
-          ...position,
-          currentPrice,
-          updatedAt: Date.now()
+    for (const update of this.overseerAgent.monitor(this.orderBooks)) {
+      if (update.closed) {
+        void this.telegram.sendExit({
+          outcome: update.position.outcome,
+          marketId: update.position.marketId,
+          reason: update.reason
         });
       }
     }
@@ -423,15 +371,6 @@ class PolymarketPaperBot {
     return "▶️ <b>Bot resumed.</b>\n\nScheduled paper scans are active.";
   }
 
-  private async fetchPositionPreviews(trades: WalletTrade[]) {
-    const wallets = [...new Set(trades.map((trade) => trade.wallet))].slice(0, this.config.maxDiscoveredWallets);
-    const positions = [];
-    for (const wallet of wallets) {
-      positions.push(...await this.clients.data.getWalletPositions(wallet));
-    }
-    return positions;
-  }
-
   private topWalletPreviewLines(limit: number): string[] {
     const wallets = this.db.getTopDiscoveredWallets(limit);
     if (wallets.length === 0) return ["No top-wallet preview yet. Try /discover again."];
@@ -448,10 +387,3 @@ const arg = process.argv[2];
 const mode = (arg === "dev" || arg === "performance" ? arg : "scan") satisfies Mode;
 const bot = new PolymarketPaperBot();
 await bot.start(mode);
-
-function mergeScores(configured: WalletScore[], discovered: WalletScore[]): WalletScore[] {
-  const scores = new Map<string, WalletScore>();
-  for (const score of discovered) scores.set(score.wallet, score);
-  for (const score of configured) scores.set(score.wallet, score);
-  return [...scores.values()].sort((a, b) => b.score - a.score);
-}

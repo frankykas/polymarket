@@ -2,6 +2,7 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type {
+  AgentEvent,
   DiscoveredWallet,
   ExitDecision,
   MarketSnapshot,
@@ -166,6 +167,15 @@ export class BotDatabase {
       CREATE TABLE IF NOT EXISTS bot_run_logs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         level TEXT NOT NULL,
+        message TEXT NOT NULL,
+        payload_json TEXT,
+        created_at INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS agent_events (
+        id TEXT PRIMARY KEY,
+        type TEXT NOT NULL,
+        agent TEXT NOT NULL,
+        visibility TEXT NOT NULL,
         message TEXT NOT NULL,
         payload_json TEXT,
         created_at INTEGER NOT NULL
@@ -439,6 +449,29 @@ export class BotDatabase {
       VALUES (?, ?, ?, ?)
     `).run(level, message, payload === undefined ? null : JSON.stringify(payload), Date.now());
   }
+
+  saveAgentEvent(event: AgentEvent): void {
+    this.db.prepare(`
+      INSERT OR REPLACE INTO agent_events
+      (id, type, agent, visibility, message, payload_json, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      event.id,
+      event.type,
+      event.agent,
+      event.visibility,
+      event.message,
+      event.payload === undefined ? null : JSON.stringify(event.payload),
+      event.createdAt
+    );
+  }
+
+  getRecentAgentEvents(limit: number, visibility?: AgentEvent["visibility"]): AgentEvent[] {
+    const rows = (visibility
+      ? this.db.prepare("SELECT * FROM agent_events WHERE visibility = ? ORDER BY created_at DESC LIMIT ?").all(visibility, limit)
+      : this.db.prepare("SELECT * FROM agent_events ORDER BY created_at DESC LIMIT ?").all(limit)) as unknown as DbAgentEvent[];
+    return rows.map(rowToAgentEvent);
+  }
 }
 
 interface DbPosition {
@@ -477,6 +510,16 @@ interface DbDiscoveredWallet {
   flags_json: string;
   first_seen_at: number;
   last_seen_at: number;
+}
+
+interface DbAgentEvent {
+  id: string;
+  type: string;
+  agent: AgentEvent["agent"];
+  visibility: AgentEvent["visibility"];
+  message: string;
+  payload_json: string | null;
+  created_at: number;
 }
 
 function rowToPosition(row: DbPosition): Position {
@@ -518,6 +561,18 @@ function rowToDiscoveredWallet(row: DbDiscoveredWallet): DiscoveredWallet {
     flags: JSON.parse(row.flags_json) as string[],
     firstSeenAt: row.first_seen_at,
     lastSeenAt: row.last_seen_at
+  };
+}
+
+function rowToAgentEvent(row: DbAgentEvent): AgentEvent {
+  return {
+    id: row.id,
+    type: row.type,
+    agent: row.agent,
+    visibility: row.visibility,
+    message: row.message,
+    payload: row.payload_json ? JSON.parse(row.payload_json) as unknown : undefined,
+    createdAt: row.created_at
   };
 }
 

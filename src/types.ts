@@ -1,5 +1,31 @@
 export type Side = "BUY" | "SELL";
 export type OutcomeSide = "YES" | "NO" | string;
+export type TradingMode = "BACKTEST" | "PAPER" | "LIVE" | "SHADOW";
+export type AgentName = "Signal Agent" | "Risk Mitigation Agent" | "Overseer Agent" | "Treasury Simulation";
+export type EventVisibility = "PUBLIC" | "PRIVATE";
+export type StrategyProfileName = "Conservative" | "Aggressive";
+export type RiskStateLabel = "SAFE" | "WARNING" | "HIGH_RISK";
+
+export interface AgentEvent {
+  id: string;
+  type: string;
+  agent: AgentName;
+  visibility: EventVisibility;
+  message: string;
+  payload?: unknown;
+  createdAt: number;
+}
+
+export interface StrategyProfile {
+  name: StrategyProfileName;
+  enabled: boolean;
+  minConfidence: number;
+  maxPositionPct: number;
+  maxOpenExposurePct: number;
+  maxOpenTrades: number;
+  allowedRiskStates: RiskStateLabel[];
+  nearCapPct: number;
+}
 
 export interface TrackedWallet {
   address: string;
@@ -129,6 +155,10 @@ export interface RiskDecision {
   decision: "APPROVE" | "REJECT" | "REDUCE_SIZE" | "PAUSE_TRADING";
   positionSize: number;
   reason: string;
+  profile?: StrategyProfileName;
+  confidence?: number;
+  riskState?: RiskStateLabel;
+  shadow?: boolean;
 }
 
 export interface PaperOrder {

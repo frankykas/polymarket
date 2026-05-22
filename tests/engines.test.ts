@@ -1,5 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { unlinkSync } from "node:fs";
+import { BotDatabase } from "../src/db.js";
 import {
   PaperExecutionEngine,
   decideExit,
@@ -9,6 +11,9 @@ import {
   generateSignals,
   scoreWallet
 } from "../src/engines.js";
+import { AgentEventWriter } from "../src/events/eventWriter.js";
+import { buildStrategyProfiles } from "../src/profiles/profiles.js";
+import { publicWalletPreviews } from "../src/public/readModels.js";
 import type { BotConfig, MarketSnapshot, OrderBookSnapshot, TradeSignal, WalletTrade } from "../src/types.js";
 
 const config: BotConfig = {
@@ -219,6 +224,74 @@ test("exit engine triggers stop loss and take profit", () => {
   assert.equal(stop.decision, "FULL_EXIT");
   const profit = decideExit(position, { ...book, bestBid: 0.6 }, config, { trackedWalletReducing: true, volumeSpike: true });
   assert.equal(profit.decision, "FULL_EXIT");
+});
+
+test("strategy profiles model conservative and aggressive risk boundaries", () => {
+  const profiles = buildStrategyProfiles(config);
+  const conservative = profiles.find((profile) => profile.name === "Conservative");
+  const aggressive = profiles.find((profile) => profile.name === "Aggressive");
+  assert.ok(conservative);
+  assert.ok(aggressive);
+  assert.equal(conservative.allowedRiskStates.includes("WARNING"), false);
+  assert.equal(aggressive.allowedRiskStates.includes("WARNING"), true);
+  assert.ok(conservative.minConfidence > aggressive.minConfidence);
+});
+
+test("agent event writer persists private and public events", () => {
+  const path = "data/test-agent-events.sqlite";
+  for (const suffix of ["", "-wal", "-shm"]) {
+    try {
+      unlinkSync(`${path}${suffix}`);
+    } catch {
+      // test cleanup is best effort
+    }
+  }
+  const db = new BotDatabase(path);
+  const writer = new AgentEventWriter(db);
+  writer.write({
+    type: "signal.created",
+    agent: "Signal Agent",
+    visibility: "PUBLIC",
+    message: "Public test",
+    payload: { alignedSourceCount: 1 }
+  });
+  writer.write({
+    type: "source.scored",
+    agent: "Signal Agent",
+    message: "Private test",
+    payload: { wallet: "0xprivate" }
+  });
+  assert.equal(db.getRecentAgentEvents(10).length, 2);
+  assert.equal(db.getRecentAgentEvents(10, "PUBLIC").length, 1);
+  db.close();
+});
+
+test("public wallet previews do not expose wallet addresses", () => {
+  const previews = publicWalletPreviews([{
+    address: "0xprivate",
+    score: 90,
+    copyabilityScore: 88,
+    tradeCount: 30,
+    buyCount: 20,
+    sellCount: 10,
+    uniqueMarkets: 8,
+    totalVolume: 12000,
+    avgTradeSize: 400,
+    realizedPnlApprox: 200,
+    profitFactorApprox: 2,
+    winRateApprox: 0.62,
+    avgReturnPctApprox: 0.1,
+    maxDrawdownApprox: 0.08,
+    avgHoldMinutesApprox: 180,
+    openPositionCount: 2,
+    openPositionValue: 500,
+    openPositionPnlApprox: 40,
+    flags: [],
+    firstSeenAt: Date.now(),
+    lastSeenAt: Date.now()
+  }]);
+  assert.equal("address" in previews[0], false);
+  assert.equal(previews[0].volumeBand, "HIGH");
 });
 
 function sampleSignal(): TradeSignal {
