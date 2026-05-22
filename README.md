@@ -41,6 +41,7 @@ Commands:
 /status  bot health and cycle stats
 /scan    manual one-shot paper scan
 /discover find profitable wallet candidates
+/topwallets ranked wallet intelligence
 /risk    current risk limits
 /wallets tracked wallets
 /pause   pause scheduled cycles

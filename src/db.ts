@@ -50,6 +50,7 @@ export class BotDatabase {
       CREATE TABLE IF NOT EXISTS discovered_wallets (
         address TEXT PRIMARY KEY,
         score REAL NOT NULL,
+        copyability_score REAL NOT NULL DEFAULT 0,
         trade_count INTEGER NOT NULL,
         buy_count INTEGER NOT NULL,
         sell_count INTEGER NOT NULL,
@@ -58,6 +59,10 @@ export class BotDatabase {
         avg_trade_size REAL NOT NULL,
         realized_pnl_approx REAL NOT NULL,
         profit_factor_approx REAL NOT NULL,
+        win_rate_approx REAL NOT NULL DEFAULT 0,
+        avg_return_pct_approx REAL NOT NULL DEFAULT 0,
+        max_drawdown_approx REAL NOT NULL DEFAULT 0,
+        avg_hold_minutes_approx REAL NOT NULL DEFAULT 0,
         flags_json TEXT NOT NULL,
         first_seen_at INTEGER NOT NULL,
         last_seen_at INTEGER NOT NULL,
@@ -162,6 +167,23 @@ export class BotDatabase {
         created_at INTEGER NOT NULL
       );
     `);
+    this.ensureDiscoveredWalletColumns();
+  }
+
+  private ensureDiscoveredWalletColumns(): void {
+    const columns = new Set(
+      (this.db.prepare("PRAGMA table_info(discovered_wallets)").all() as Array<{ name: string }>).map((column) => column.name)
+    );
+    const missing: Array<[string, string]> = [
+      ["copyability_score", "REAL NOT NULL DEFAULT 0"],
+      ["win_rate_approx", "REAL NOT NULL DEFAULT 0"],
+      ["avg_return_pct_approx", "REAL NOT NULL DEFAULT 0"],
+      ["max_drawdown_approx", "REAL NOT NULL DEFAULT 0"],
+      ["avg_hold_minutes_approx", "REAL NOT NULL DEFAULT 0"]
+    ];
+    for (const [name, definition] of missing) {
+      if (!columns.has(name)) this.db.exec(`ALTER TABLE discovered_wallets ADD COLUMN ${name} ${definition}`);
+    }
   }
 
   syncWallets(wallets: TrackedWallet[]): void {
@@ -192,12 +214,14 @@ export class BotDatabase {
   saveDiscoveredWallet(wallet: DiscoveredWallet): void {
     this.db.prepare(`
       INSERT OR REPLACE INTO discovered_wallets
-      (address, score, trade_count, buy_count, sell_count, unique_markets, total_volume, avg_trade_size,
-       realized_pnl_approx, profit_factor_approx, flags_json, first_seen_at, last_seen_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      (address, score, copyability_score, trade_count, buy_count, sell_count, unique_markets, total_volume, avg_trade_size,
+       realized_pnl_approx, profit_factor_approx, win_rate_approx, avg_return_pct_approx, max_drawdown_approx,
+       avg_hold_minutes_approx, flags_json, first_seen_at, last_seen_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       wallet.address,
       wallet.score,
+      wallet.copyabilityScore,
       wallet.tradeCount,
       wallet.buyCount,
       wallet.sellCount,
@@ -206,6 +230,10 @@ export class BotDatabase {
       wallet.avgTradeSize,
       wallet.realizedPnlApprox,
       wallet.profitFactorApprox,
+      wallet.winRateApprox,
+      wallet.avgReturnPctApprox,
+      wallet.maxDrawdownApprox,
+      wallet.avgHoldMinutesApprox,
       JSON.stringify(wallet.flags),
       wallet.firstSeenAt,
       wallet.lastSeenAt,
@@ -216,7 +244,7 @@ export class BotDatabase {
   getTopDiscoveredWallets(limit: number): DiscoveredWallet[] {
     const rows = this.db.prepare(`
       SELECT * FROM discovered_wallets
-      ORDER BY score DESC, total_volume DESC
+      ORDER BY copyability_score DESC, score DESC, total_volume DESC
       LIMIT ?
     `).all(limit) as unknown as DbDiscoveredWallet[];
     return rows.map(rowToDiscoveredWallet);
@@ -387,6 +415,7 @@ interface DbPosition {
 interface DbDiscoveredWallet {
   address: string;
   score: number;
+  copyability_score: number;
   trade_count: number;
   buy_count: number;
   sell_count: number;
@@ -395,6 +424,10 @@ interface DbDiscoveredWallet {
   avg_trade_size: number;
   realized_pnl_approx: number;
   profit_factor_approx: number;
+  win_rate_approx: number;
+  avg_return_pct_approx: number;
+  max_drawdown_approx: number;
+  avg_hold_minutes_approx: number;
   flags_json: string;
   first_seen_at: number;
   last_seen_at: number;
@@ -420,6 +453,7 @@ function rowToDiscoveredWallet(row: DbDiscoveredWallet): DiscoveredWallet {
   return {
     address: row.address,
     score: row.score,
+    copyabilityScore: row.copyability_score,
     tradeCount: row.trade_count,
     buyCount: row.buy_count,
     sellCount: row.sell_count,
@@ -428,6 +462,10 @@ function rowToDiscoveredWallet(row: DbDiscoveredWallet): DiscoveredWallet {
     avgTradeSize: row.avg_trade_size,
     realizedPnlApprox: row.realized_pnl_approx,
     profitFactorApprox: row.profit_factor_approx,
+    winRateApprox: row.win_rate_approx,
+    avgReturnPctApprox: row.avg_return_pct_approx,
+    maxDrawdownApprox: row.max_drawdown_approx,
+    avgHoldMinutesApprox: row.avg_hold_minutes_approx,
     flags: JSON.parse(row.flags_json) as string[],
     firstSeenAt: row.first_seen_at,
     lastSeenAt: row.last_seen_at

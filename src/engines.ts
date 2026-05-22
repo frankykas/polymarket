@@ -33,25 +33,33 @@ export function discoverWallets(trades: WalletTrade[], config: BotConfig, now = 
     const uniqueMarkets = new Set(sorted.map((trade) => trade.marketId)).size;
     const buyCount = sorted.filter((trade) => trade.side === "BUY").length;
     const sellCount = sorted.filter((trade) => trade.side === "SELL").length;
-    const realizedPnlApprox = approximateRealizedPnl(sorted);
+    const performance = analyzeWalletPerformance(sorted);
+    const realizedPnlApprox = performance.realizedPnlApprox;
     const flags: string[] = [];
     if (tradeCount < config.minDiscoveryTrades) flags.push("LOW_TRADE_COUNT");
     if (totalVolume < config.minDiscoveryVolume) flags.push("LOW_VOLUME");
     if (uniqueMarkets <= 1 && tradeCount >= config.minDiscoveryTrades) flags.push("SINGLE_MARKET");
     if (sellCount === 0) flags.push("NO_SELL_HISTORY");
     if (realizedPnlApprox < 0) flags.push("NEGATIVE_REALIZED_APPROX");
+    if (performance.avgHoldMinutesApprox < 1 && sellCount > 0) flags.push("VERY_FAST_TRADER");
+    if (performance.maxDrawdownApprox > 0.25) flags.push("HIGH_DRAWDOWN");
 
     const sampleScore = Math.min(25, (tradeCount / Math.max(1, config.minDiscoveryTrades)) * 18);
     const volumeScore = Math.min(20, (totalVolume / Math.max(1, config.minDiscoveryVolume)) * 12);
     const breadthScore = Math.min(15, uniqueMarkets * 4);
     const activityScore = Math.min(15, sorted.filter((trade) => now - trade.timestamp <= 24 * 60 * 60 * 1000).length * 3);
     const pnlScore = Math.max(0, Math.min(25, 12 + realizedPnlApprox));
-    const penalty = flags.includes("SINGLE_MARKET") ? 6 : 0;
-    const score = Math.round(Math.max(0, Math.min(100, sampleScore + volumeScore + breadthScore + activityScore + pnlScore - penalty)));
+    const winRateScore = Math.min(15, performance.winRateApprox * 15);
+    const drawdownPenalty = Math.min(18, performance.maxDrawdownApprox * 40);
+    const speedPenalty = flags.includes("VERY_FAST_TRADER") ? 8 : 0;
+    const concentrationPenalty = flags.includes("SINGLE_MARKET") ? 6 : 0;
+    const score = Math.round(Math.max(0, Math.min(100, sampleScore + volumeScore + breadthScore + activityScore + pnlScore + winRateScore - drawdownPenalty - speedPenalty)));
+    const copyabilityScore = Math.round(Math.max(0, Math.min(100, score - concentrationPenalty - speedPenalty - Math.max(0, 20 - performance.avgHoldMinutesApprox) * 0.2)));
 
     discovered.push({
       address,
       score,
+      copyabilityScore,
       tradeCount,
       buyCount,
       sellCount,
@@ -59,7 +67,11 @@ export function discoverWallets(trades: WalletTrade[], config: BotConfig, now = 
       totalVolume,
       avgTradeSize: tradeCount > 0 ? totalVolume / tradeCount : 0,
       realizedPnlApprox,
-      profitFactorApprox: realizedPnlApprox > 0 ? Math.max(1, 1 + realizedPnlApprox / Math.max(1, totalVolume)) : 0,
+      profitFactorApprox: performance.profitFactorApprox,
+      winRateApprox: performance.winRateApprox,
+      avgReturnPctApprox: performance.avgReturnPctApprox,
+      maxDrawdownApprox: performance.maxDrawdownApprox,
+      avgHoldMinutesApprox: performance.avgHoldMinutesApprox,
       flags,
       firstSeenAt: sorted[0]?.timestamp ?? now,
       lastSeenAt: sorted[sorted.length - 1]?.timestamp ?? now
@@ -68,7 +80,7 @@ export function discoverWallets(trades: WalletTrade[], config: BotConfig, now = 
 
   return discovered
     .filter((wallet) => wallet.tradeCount >= config.minDiscoveryTrades && wallet.totalVolume >= config.minDiscoveryVolume)
-    .sort((a, b) => b.score - a.score || b.totalVolume - a.totalVolume)
+    .sort((a, b) => b.copyabilityScore - a.copyabilityScore || b.score - a.score || b.totalVolume - a.totalVolume)
     .slice(0, config.maxDiscoveredWallets);
 }
 
@@ -115,13 +127,31 @@ export function scoreDiscoveredWallet(wallet: DiscoveredWallet, now = Date.now()
   };
 }
 
-function approximateRealizedPnl(trades: WalletTrade[]): number {
-  const lots = new Map<string, { size: number; cost: number }>();
+interface WalletPerformance {
+  realizedPnlApprox: number;
+  profitFactorApprox: number;
+  winRateApprox: number;
+  avgReturnPctApprox: number;
+  maxDrawdownApprox: number;
+  avgHoldMinutesApprox: number;
+}
+
+function analyzeWalletPerformance(trades: WalletTrade[]): WalletPerformance {
+  const lots = new Map<string, { size: number; cost: number; openedAt: number }>();
+  const closedReturns: number[] = [];
+  const holdMinutes: number[] = [];
   let pnl = 0;
+  let grossProfit = 0;
+  let grossLoss = 0;
+  let equity = 0;
+  let peakEquity = 0;
+  let maxDrawdown = 0;
+
   for (const trade of trades) {
     const key = `${trade.marketId}:${trade.outcome}`;
-    const lot = lots.get(key) ?? { size: 0, cost: 0 };
+    const lot = lots.get(key) ?? { size: 0, cost: 0, openedAt: trade.timestamp };
     if (trade.side === "BUY") {
+      if (lot.size <= 0) lot.openedAt = trade.timestamp;
       lot.size += trade.size;
       lot.cost += trade.price * trade.size;
       lots.set(key, lot);
@@ -130,12 +160,31 @@ function approximateRealizedPnl(trades: WalletTrade[]): number {
     if (lot.size <= 0) continue;
     const sold = Math.min(lot.size, trade.size);
     const avgCost = lot.cost / lot.size;
-    pnl += (trade.price - avgCost) * sold;
+    const tradePnl = (trade.price - avgCost) * sold;
+    const returnPct = avgCost > 0 ? (trade.price - avgCost) / avgCost : 0;
+    pnl += tradePnl;
+    equity += tradePnl;
+    peakEquity = Math.max(peakEquity, equity);
+    if (peakEquity > 0) maxDrawdown = Math.max(maxDrawdown, (peakEquity - equity) / peakEquity);
+    if (tradePnl >= 0) grossProfit += tradePnl;
+    else grossLoss += Math.abs(tradePnl);
+    closedReturns.push(returnPct);
+    holdMinutes.push(Math.max(0, (trade.timestamp - lot.openedAt) / 60000));
     lot.size -= sold;
     lot.cost = Math.max(0, lot.cost - avgCost * sold);
+    if (lot.size <= 0) lot.openedAt = trade.timestamp;
     lots.set(key, lot);
   }
-  return pnl;
+
+  const wins = closedReturns.filter((value) => value > 0).length;
+  return {
+    realizedPnlApprox: pnl,
+    profitFactorApprox: grossLoss > 0 ? grossProfit / grossLoss : grossProfit > 0 ? grossProfit : 0,
+    winRateApprox: closedReturns.length > 0 ? wins / closedReturns.length : 0,
+    avgReturnPctApprox: closedReturns.length > 0 ? closedReturns.reduce((sum, value) => sum + value, 0) / closedReturns.length : 0,
+    maxDrawdownApprox: maxDrawdown,
+    avgHoldMinutesApprox: holdMinutes.length > 0 ? holdMinutes.reduce((sum, value) => sum + value, 0) / holdMinutes.length : 0
+  };
 }
 
 export function evaluateMarketQuality(

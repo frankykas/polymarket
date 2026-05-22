@@ -119,6 +119,7 @@ export class TelegramAlerts {
     if (normalized === "scan" || normalized === "discover") return this.sendTo(chatId, await handlers.scan(), mainKeyboard());
     if (normalized === "risk") return this.sendTo(chatId, await handlers.risk(), mainKeyboard());
     if (normalized === "wallets") return this.sendTo(chatId, await handlers.wallets(), mainKeyboard());
+    if (normalized === "topwallets") return this.sendTo(chatId, await handlers.topWallets(), mainKeyboard());
     if (normalized === "pause") return this.sendTo(chatId, await handlers.pause(), mainKeyboard());
     if (normalized === "resume") return this.sendTo(chatId, await handlers.resume(), mainKeyboard());
     await this.sendTo(chatId, menuText(), mainKeyboard());
@@ -177,6 +178,7 @@ export interface TelegramHandlers {
   scan: () => string | Promise<string>;
   risk: () => string | Promise<string>;
   wallets: () => string | Promise<string>;
+  topWallets: () => string | Promise<string>;
   pause: () => string | Promise<string>;
   resume: () => string | Promise<string>;
 }
@@ -207,6 +209,9 @@ function mainKeyboard(): InlineKeyboard {
         { text: "👛 Wallets", callback_data: "wallets" }
       ],
       [
+        { text: "🏆 Top Wallets", callback_data: "topwallets" }
+      ],
+      [
         { text: "⏸ Pause", callback_data: "pause" },
         { text: "▶️ Resume", callback_data: "resume" }
       ]
@@ -228,6 +233,7 @@ function menuText(): string {
     "/status - bot health",
     "/scan - run one paper scan",
     "/discover - find profitable wallet candidates",
+    "/topwallets - ranked wallet intelligence",
     "/risk - current limits",
     "/wallets - tracked wallets",
     "/pause - pause cycles",

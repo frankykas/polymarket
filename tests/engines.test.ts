@@ -97,7 +97,7 @@ test("wallet discovery ranks active repeat traders and filters tiny samples", ()
       side: index < 6 ? "BUY" as const : "SELL" as const,
       price: index < 6 ? 0.4 : 0.6,
       size: 25,
-      timestamp: Date.now() - index * 1000
+      timestamp: Date.now() + index * 1000
     })),
     {
       wallet: "0xtiny",
@@ -113,6 +113,10 @@ test("wallet discovery ranks active repeat traders and filters tiny samples", ()
   assert.equal(wallets.length, 1);
   assert.equal(wallets[0].address, "0xgood");
   assert.ok(wallets[0].score > 50);
+  assert.ok(wallets[0].copyabilityScore > 40);
+  assert.ok(wallets[0].winRateApprox > 0);
+  assert.ok(wallets[0].avgReturnPctApprox > 0);
+  assert.ok(wallets[0].avgHoldMinutesApprox >= 0);
 });
 
 test("market quality rejects wide spread and low liquidity", () => {

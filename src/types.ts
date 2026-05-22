@@ -23,6 +23,7 @@ export interface WalletTrade {
 export interface DiscoveredWallet {
   address: string;
   score: number;
+  copyabilityScore: number;
   tradeCount: number;
   buyCount: number;
   sellCount: number;
@@ -31,6 +32,10 @@ export interface DiscoveredWallet {
   avgTradeSize: number;
   realizedPnlApprox: number;
   profitFactorApprox: number;
+  winRateApprox: number;
+  avgReturnPctApprox: number;
+  maxDrawdownApprox: number;
+  avgHoldMinutesApprox: number;
   flags: string[];
   firstSeenAt: number;
   lastSeenAt: number;

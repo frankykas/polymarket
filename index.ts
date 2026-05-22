@@ -73,6 +73,7 @@ class PolymarketPaperBot {
       scan: () => this.telegramScan(),
       risk: () => this.telegramRisk(),
       wallets: () => this.telegramWallets(),
+      topWallets: () => this.telegramTopWallets(),
       pause: () => this.telegramPause(),
       resume: () => this.telegramResume()
     });
@@ -326,7 +327,27 @@ class PolymarketPaperBot {
       ...this.wallets.map((wallet) => `• <code>${wallet.address}</code>${wallet.label ? ` - ${wallet.label}` : ""}`),
       "",
       "🔍 <b>Top Discovered</b>",
-      ...discovered.map((wallet) => `• <code>${wallet.address}</code> score=${wallet.score} trades=${wallet.tradeCount} vol=$${wallet.totalVolume.toFixed(0)}`)
+      ...discovered.map((wallet) => `• <code>${wallet.address}</code> copy=${wallet.copyabilityScore} score=${wallet.score} trades=${wallet.tradeCount}`)
+    ].join("\n");
+  }
+
+  private telegramTopWallets(): string {
+    const wallets = this.db.getTopDiscoveredWallets(10);
+    if (wallets.length === 0) {
+      return "🏆 <b>Top Wallets</b>\n\nNo wallet intelligence yet. Run /discover first.";
+    }
+    return [
+      "🏆 <b>Top Wallet Intelligence</b>",
+      "",
+      ...wallets.flatMap((wallet, index) => [
+        `<b>${index + 1}. Copy ${wallet.copyabilityScore}/100 | Score ${wallet.score}/100</b>`,
+        `<code>${wallet.address}</code>`,
+        `Trades ${wallet.tradeCount} | Markets ${wallet.uniqueMarkets} | Vol $${wallet.totalVolume.toFixed(0)}`,
+        `PnL~ $${wallet.realizedPnlApprox.toFixed(2)} | Win~ ${(wallet.winRateApprox * 100).toFixed(0)}% | Return~ ${(wallet.avgReturnPctApprox * 100).toFixed(1)}%`,
+        `DD~ ${(wallet.maxDrawdownApprox * 100).toFixed(0)}% | Hold~ ${wallet.avgHoldMinutesApprox.toFixed(0)}m`,
+        wallet.flags.length ? `Flags: ${wallet.flags.join(", ")}` : "Flags: clean",
+        ""
+      ])
     ].join("\n");
   }
 
