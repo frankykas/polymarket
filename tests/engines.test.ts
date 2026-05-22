@@ -161,7 +161,7 @@ test("wallet discovery caps tiny perfect win-rate samples", () => {
       outcome: "YES",
       side: "BUY",
       price: 0.4,
-      size: 10,
+      size: 30,
       timestamp: Date.now()
     },
     {
@@ -179,7 +179,7 @@ test("wallet discovery caps tiny perfect win-rate samples", () => {
       outcome: "YES",
       side: "BUY",
       price: 0.4,
-      size: 10,
+      size: 30,
       timestamp: Date.now() + 120_000
     }
   ];
@@ -207,6 +207,46 @@ test("wallet discovery infers dominant market category", () => {
   }]);
   assert.equal(wallets[0].dominantCategory, "politics");
   assert.ok(wallets[0].categoryConsistencyScore > 0);
+});
+
+test("wallet discovery attributes resolved market outcomes when available", () => {
+  const trades: WalletTrade[] = [
+    {
+      wallet: "0xresolved",
+      marketId: "resolved-win",
+      outcome: "YES",
+      side: "BUY",
+      price: 0.4,
+      size: 10,
+      timestamp: Date.now()
+    },
+    {
+      wallet: "0xresolved",
+      marketId: "resolved-loss",
+      outcome: "NO",
+      side: "BUY",
+      price: 0.4,
+      size: 10,
+      timestamp: Date.now() + 60_000
+    },
+    ...Array.from({ length: 4 }, (_, index) => ({
+      wallet: "0xresolved",
+      marketId: `open-${index}`,
+      outcome: "YES",
+      side: "BUY" as const,
+      price: 0.5,
+      size: 30,
+      timestamp: Date.now() + (index + 2) * 60_000
+    }))
+  ];
+  const wallets = discoverWallets(trades, config, Date.now(), [], [
+    { ...market, id: "resolved-win", resolved: true, winningOutcome: "YES" },
+    { ...market, id: "resolved-loss", resolved: true, winningOutcome: "YES" }
+  ]);
+  assert.equal(wallets[0].resolvedMarkets, 2);
+  assert.equal(wallets[0].resolvedWins, 1);
+  assert.equal(wallets[0].resolvedLosses, 1);
+  assert.equal(wallets[0].resolvedWinRate, 0.5);
 });
 
 test("market quality rejects wide spread and low liquidity", () => {
@@ -325,6 +365,32 @@ test("agent event writer persists private and public events", () => {
   db.close();
 });
 
+test("database persists wallet trade history with dedupe", () => {
+  const path = "data/test-wallet-history.sqlite";
+  for (const suffix of ["", "-wal", "-shm"]) {
+    try {
+      unlinkSync(`${path}${suffix}`);
+    } catch {
+      // test cleanup is best effort
+    }
+  }
+  const db = new BotDatabase(path);
+  const trade: WalletTrade = {
+    wallet: "0xhistory",
+    marketId: "m1",
+    outcome: "YES",
+    side: "BUY",
+    price: 0.5,
+    size: 10,
+    timestamp: 123
+  };
+  assert.equal(db.saveWalletTrades([trade, trade]), 1);
+  const history = db.getWalletTradeHistory("0xhistory", 10);
+  assert.equal(history.length, 1);
+  assert.equal(history[0].wallet, "0xhistory");
+  db.close();
+});
+
 test("public wallet previews do not expose wallet addresses", () => {
   const previews = publicWalletPreviews([{
     address: "0xprivate",
@@ -335,6 +401,10 @@ test("public wallet previews do not expose wallet addresses", () => {
     exitBehaviorScore: 65,
     sampleConfidence: 0.9,
     dominantCategory: "politics",
+    resolvedMarkets: 3,
+    resolvedWins: 2,
+    resolvedLosses: 1,
+    resolvedWinRate: 2 / 3,
     tradeCount: 30,
     buyCount: 20,
     sellCount: 10,

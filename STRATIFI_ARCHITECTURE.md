@@ -83,18 +83,31 @@ Every important handoff should become an event in `agent_events`.
 Current event types include:
 - `market.discovery_completed`
 - `source.discovered`
+- `source.backfill_completed`
 - `source.scored`
 - `signal.created`
 - `risk.decision_created`
 - `trade.updated`
 - `trade.closed`
 
+## Source History
+
+StratiFi stores normalized wallet trades in `wallet_trades` and writes every score update to `source_score_snapshots`.
+
+This means source intelligence is no longer limited to one scan response. When the Signal Agent sees a wallet again, it can score from stored history plus fresh trades. Duplicate trades are ignored with a deterministic trade key.
+
+Market snapshots also carry optional resolution fields:
+- `resolved`
+- `winningOutcome`
+
+When resolution data is available, wallet scoring records resolved wins, resolved losses, resolved markets, and resolved win rate. Public-facing views should show only aggregate source strength and resolved-performance summaries, not the wallet address.
+
 This gives us the foundation for the transparency dashboard, Telegram summaries, audit review, and future backtesting comparisons.
 
 ## Next Build Phases
 
-1. Expand wallet scoring into category-specific source profiles.
-2. Add historical backfill and resolved-market outcome attribution.
+1. Pull deeper paginated source history for top candidates.
+2. Add resolved-market lookup/backfill for older markets not present in active scans.
 3. Split Telegram into private admin commands and public alert-only mode.
 4. Add shadow trades for rejected-but-interesting signals.
 5. Build the dashboard against public read models and event feeds.

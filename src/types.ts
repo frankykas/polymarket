@@ -83,6 +83,10 @@ export interface DiscoveredWallet {
   openPositionCount: number;
   openPositionValue: number;
   openPositionPnlApprox: number;
+  resolvedMarkets: number;
+  resolvedWins: number;
+  resolvedLosses: number;
+  resolvedWinRate: number;
   flags: string[];
   firstSeenAt: number;
   lastSeenAt: number;
@@ -97,6 +101,10 @@ export interface WalletScore {
   categoryConsistencyScore?: number;
   sampleConfidence?: number;
   dominantCategory?: MarketCategory;
+  resolvedMarkets?: number;
+  resolvedWins?: number;
+  resolvedLosses?: number;
+  resolvedWinRate?: number;
   tradeCount: number;
   recentTradeCount: number;
   reliability: "LOW" | "MEDIUM" | "HIGH";
@@ -113,6 +121,8 @@ export interface MarketSnapshot {
   closed: boolean;
   archived: boolean;
   acceptingOrders: boolean;
+  resolved?: boolean;
+  winningOutcome?: string;
   endDate?: string;
   liquidity: number;
   volume24h: number;

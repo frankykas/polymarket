@@ -46,6 +46,18 @@ export class SignalAgent {
     });
 
     const discoveryTrades = this.config.discoveryEnabled ? await this.fetchDiscoveryTrades(watchedMarkets) : [];
+    const discoveryInserted = this.db.saveWalletTrades(discoveryTrades);
+    if (discoveryTrades.length > 0) {
+      this.events.write({
+        type: "source.backfill_completed",
+        agent: "Signal Agent",
+        message: "Stored market-discovery wallet trades.",
+        payload: {
+          observedTrades: discoveryTrades.length,
+          insertedTrades: discoveryInserted
+        }
+      });
+    }
     const walletPreviewPositions = this.config.discoveryEnabled ? await this.fetchPositionPreviews(discoveryTrades) : [];
     const discoveredWallets = this.config.discoveryEnabled
       ? discoverWallets(discoveryTrades, this.config, Date.now(), walletPreviewPositions, watchedMarkets)
@@ -90,7 +102,7 @@ export class SignalAgent {
         agent: "Signal Agent",
         message: "Source wallet scored.",
         payload: {
-          wallet: score.wallet,
+      wallet: score.wallet,
           label: score.label,
           score: score.score,
           copyabilityScore: score.copyabilityScore,
@@ -148,7 +160,22 @@ export class SignalAgent {
     const trades = new Map<string, WalletTrade[]>();
     for (const wallet of wallets) {
       const walletTrades = await this.provider.getWalletTrades(wallet.address, this.config.walletActivityLimit);
-      trades.set(wallet.address.toLowerCase(), walletTrades);
+      const inserted = this.db.saveWalletTrades(walletTrades);
+      const history = this.db.getWalletTradeHistory(wallet.address, Math.max(this.config.walletActivityLimit, 500));
+      trades.set(wallet.address.toLowerCase(), history.length > 0 ? history : walletTrades);
+      if (walletTrades.length > 0) {
+        this.events.write({
+          type: "source.backfill_completed",
+          agent: "Signal Agent",
+          message: "Stored source wallet trade history.",
+          payload: {
+            wallet: wallet.address.toLowerCase(),
+            observedTrades: walletTrades.length,
+            insertedTrades: inserted,
+            historyTrades: history.length
+          }
+        });
+      }
     }
     return trades;
   }

@@ -212,6 +212,8 @@ function normalizeMarket(raw: unknown): MarketSnapshot {
     closed: Boolean(item.closed),
     archived: Boolean(item.archived),
     acceptingOrders: item.acceptingOrders === undefined ? true : Boolean(item.acceptingOrders),
+    resolved: Boolean(item.resolved ?? item.isResolved ?? (item.closed && (item.winningOutcome || item.winner))),
+    winningOutcome: stringOrUndefined(item.winningOutcome ?? item.winner ?? item.resolutionOutcome),
     endDate: stringOrUndefined(item.endDate ?? item.endDateIso),
     liquidity: numberFrom(item.liquidityNum ?? item.liquidityClob ?? item.liquidity),
     volume24h: numberFrom(item.volume24hrClob ?? item.volume24hr ?? item.volume24h ?? item.volume),

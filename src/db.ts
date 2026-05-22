@@ -14,7 +14,8 @@ import type {
   RiskDecision,
   TradeSignal,
   TrackedWallet,
-  WalletScore
+  WalletScore,
+  WalletTrade
 } from "./types.js";
 
 export class BotDatabase {
@@ -91,6 +92,8 @@ export class BotDatabase {
         closed INTEGER NOT NULL,
         archived INTEGER NOT NULL,
         accepting_orders INTEGER NOT NULL,
+        resolved INTEGER NOT NULL DEFAULT 0,
+        winning_outcome TEXT,
         liquidity REAL NOT NULL,
         volume_24h REAL NOT NULL,
         outcomes_json TEXT NOT NULL,
@@ -190,9 +193,44 @@ export class BotDatabase {
         payload_json TEXT,
         created_at INTEGER NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS wallet_trades (
+        id TEXT PRIMARY KEY,
+        wallet TEXT NOT NULL,
+        market_id TEXT NOT NULL,
+        condition_id TEXT,
+        token_id TEXT,
+        outcome TEXT NOT NULL,
+        side TEXT NOT NULL,
+        price REAL NOT NULL,
+        size REAL NOT NULL,
+        timestamp INTEGER NOT NULL,
+        raw_json TEXT,
+        created_at INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_wallet_trades_wallet_time ON wallet_trades (wallet, timestamp DESC);
+      CREATE INDEX IF NOT EXISTS idx_wallet_trades_market ON wallet_trades (market_id);
+      CREATE TABLE IF NOT EXISTS source_score_snapshots (
+        id TEXT PRIMARY KEY,
+        wallet TEXT NOT NULL,
+        score REAL NOT NULL,
+        copyability_score REAL,
+        hot_score REAL,
+        category_consistency_score REAL,
+        sample_confidence REAL,
+        dominant_category TEXT,
+        resolved_markets INTEGER NOT NULL DEFAULT 0,
+        resolved_wins INTEGER NOT NULL DEFAULT 0,
+        resolved_losses INTEGER NOT NULL DEFAULT 0,
+        resolved_win_rate REAL NOT NULL DEFAULT 0,
+        trade_count INTEGER NOT NULL,
+        reliability TEXT NOT NULL,
+        flags_json TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      );
     `);
     this.ensureDiscoveredWalletColumns();
     this.ensureWalletScoreColumns();
+    this.ensureMarketColumns();
   }
 
   private ensureDiscoveredWalletColumns(): void {
@@ -212,7 +250,11 @@ export class BotDatabase {
       ["avg_hold_minutes_approx", "REAL NOT NULL DEFAULT 0"],
       ["open_position_count", "INTEGER NOT NULL DEFAULT 0"],
       ["open_position_value", "REAL NOT NULL DEFAULT 0"],
-      ["open_position_pnl_approx", "REAL NOT NULL DEFAULT 0"]
+      ["open_position_pnl_approx", "REAL NOT NULL DEFAULT 0"],
+      ["resolved_markets", "INTEGER NOT NULL DEFAULT 0"],
+      ["resolved_wins", "INTEGER NOT NULL DEFAULT 0"],
+      ["resolved_losses", "INTEGER NOT NULL DEFAULT 0"],
+      ["resolved_win_rate", "REAL NOT NULL DEFAULT 0"]
     ];
     for (const [name, definition] of missing) {
       if (!columns.has(name)) this.db.exec(`ALTER TABLE discovered_wallets ADD COLUMN ${name} ${definition}`);
@@ -228,10 +270,27 @@ export class BotDatabase {
       ["hot_score", "REAL"],
       ["category_consistency_score", "REAL"],
       ["sample_confidence", "REAL"],
-      ["dominant_category", "TEXT"]
+      ["dominant_category", "TEXT"],
+      ["resolved_markets", "INTEGER"],
+      ["resolved_wins", "INTEGER"],
+      ["resolved_losses", "INTEGER"],
+      ["resolved_win_rate", "REAL"]
     ];
     for (const [name, definition] of missing) {
       if (!columns.has(name)) this.db.exec(`ALTER TABLE wallet_scores ADD COLUMN ${name} ${definition}`);
+    }
+  }
+
+  private ensureMarketColumns(): void {
+    const columns = new Set(
+      (this.db.prepare("PRAGMA table_info(markets)").all() as Array<{ name: string }>).map((column) => column.name)
+    );
+    const missing: Array<[string, string]> = [
+      ["resolved", "INTEGER NOT NULL DEFAULT 0"],
+      ["winning_outcome", "TEXT"]
+    ];
+    for (const [name, definition] of missing) {
+      if (!columns.has(name)) this.db.exec(`ALTER TABLE markets ADD COLUMN ${name} ${definition}`);
     }
   }
 
@@ -247,8 +306,8 @@ export class BotDatabase {
     this.db.prepare(`
       INSERT OR REPLACE INTO wallet_scores
       (wallet, label, score, copyability_score, hot_score, category_consistency_score, sample_confidence, dominant_category,
-       trade_count, recent_trade_count, reliability, flags_json, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       resolved_markets, resolved_wins, resolved_losses, resolved_win_rate, trade_count, recent_trade_count, reliability, flags_json, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       score.wallet,
       score.label ?? null,
@@ -258,12 +317,17 @@ export class BotDatabase {
       score.categoryConsistencyScore ?? null,
       score.sampleConfidence ?? null,
       score.dominantCategory ?? null,
+      score.resolvedMarkets ?? null,
+      score.resolvedWins ?? null,
+      score.resolvedLosses ?? null,
+      score.resolvedWinRate ?? null,
       score.tradeCount,
       score.recentTradeCount,
       score.reliability,
       JSON.stringify(score.flags),
       score.updatedAt
     );
+    this.saveSourceScoreSnapshot(score);
   }
 
   saveDiscoveredWallet(wallet: DiscoveredWallet): void {
@@ -273,8 +337,8 @@ export class BotDatabase {
        dominant_category, trade_count, buy_count, sell_count, unique_markets, total_volume, avg_trade_size,
        realized_pnl_approx, profit_factor_approx, win_rate_approx, avg_return_pct_approx, max_drawdown_approx,
        avg_hold_minutes_approx, open_position_count, open_position_value, open_position_pnl_approx,
-       flags_json, first_seen_at, last_seen_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       resolved_markets, resolved_wins, resolved_losses, resolved_win_rate, flags_json, first_seen_at, last_seen_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       wallet.address,
       wallet.score,
@@ -299,6 +363,10 @@ export class BotDatabase {
       wallet.openPositionCount,
       wallet.openPositionValue,
       wallet.openPositionPnlApprox,
+      wallet.resolvedMarkets,
+      wallet.resolvedWins,
+      wallet.resolvedLosses,
+      wallet.resolvedWinRate,
       JSON.stringify(wallet.flags),
       wallet.firstSeenAt,
       wallet.lastSeenAt,
@@ -319,8 +387,8 @@ export class BotDatabase {
     this.db.prepare(`
       INSERT OR REPLACE INTO markets
       (id, condition_id, question, active, closed, archived, accepting_orders, liquidity, volume_24h,
-       outcomes_json, clob_token_ids_json, raw_json, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       resolved, winning_outcome, outcomes_json, clob_token_ids_json, raw_json, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       market.id,
       market.conditionId ?? null,
@@ -331,6 +399,8 @@ export class BotDatabase {
       market.acceptingOrders ? 1 : 0,
       market.liquidity,
       market.volume24h,
+      market.resolved ? 1 : 0,
+      market.winningOutcome ?? null,
       JSON.stringify(market.outcomes),
       JSON.stringify(market.clobTokenIds),
       JSON.stringify(market.raw ?? null),
@@ -516,6 +586,70 @@ export class BotDatabase {
       : this.db.prepare("SELECT * FROM agent_events ORDER BY created_at DESC LIMIT ?").all(limit)) as unknown as DbAgentEvent[];
     return rows.map(rowToAgentEvent);
   }
+
+  saveWalletTrades(trades: WalletTrade[]): number {
+    const stmt = this.db.prepare(`
+      INSERT OR IGNORE INTO wallet_trades
+      (id, wallet, market_id, condition_id, token_id, outcome, side, price, size, timestamp, raw_json, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    let inserted = 0;
+    const now = Date.now();
+    for (const trade of trades) {
+      const result = stmt.run(
+        walletTradeId(trade),
+        trade.wallet.toLowerCase(),
+        trade.marketId,
+        trade.conditionId ?? null,
+        trade.tokenId ?? null,
+        trade.outcome,
+        trade.side,
+        trade.price,
+        trade.size,
+        trade.timestamp,
+        JSON.stringify(trade.raw ?? null),
+        now
+      );
+      inserted += Number(result.changes ?? 0);
+    }
+    return inserted;
+  }
+
+  getWalletTradeHistory(wallet: string, limit: number): WalletTrade[] {
+    const rows = this.db.prepare(`
+      SELECT * FROM wallet_trades
+      WHERE wallet = ?
+      ORDER BY timestamp DESC
+      LIMIT ?
+    `).all(wallet.toLowerCase(), limit) as unknown as DbWalletTrade[];
+    return rows.map(rowToWalletTrade).sort((a, b) => a.timestamp - b.timestamp);
+  }
+
+  private saveSourceScoreSnapshot(score: WalletScore): void {
+    this.db.prepare(`
+      INSERT INTO source_score_snapshots
+      (id, wallet, score, copyability_score, hot_score, category_consistency_score, sample_confidence, dominant_category,
+       resolved_markets, resolved_wins, resolved_losses, resolved_win_rate, trade_count, reliability, flags_json, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      randomId("score"),
+      score.wallet,
+      score.score,
+      score.copyabilityScore ?? null,
+      score.hotScore ?? null,
+      score.categoryConsistencyScore ?? null,
+      score.sampleConfidence ?? null,
+      score.dominantCategory ?? null,
+      score.resolvedMarkets ?? 0,
+      score.resolvedWins ?? 0,
+      score.resolvedLosses ?? 0,
+      score.resolvedWinRate ?? 0,
+      score.tradeCount,
+      score.reliability,
+      JSON.stringify(score.flags),
+      score.updatedAt
+    );
+  }
 }
 
 interface DbPosition {
@@ -556,9 +690,26 @@ interface DbDiscoveredWallet {
   open_position_count: number;
   open_position_value: number;
   open_position_pnl_approx: number;
+  resolved_markets: number;
+  resolved_wins: number;
+  resolved_losses: number;
+  resolved_win_rate: number;
   flags_json: string;
   first_seen_at: number;
   last_seen_at: number;
+}
+
+interface DbWalletTrade {
+  wallet: string;
+  market_id: string;
+  condition_id: string | null;
+  token_id: string | null;
+  outcome: string;
+  side: WalletTrade["side"];
+  price: number;
+  size: number;
+  timestamp: number;
+  raw_json: string | null;
 }
 
 interface DbAgentEvent {
@@ -612,10 +763,43 @@ function rowToDiscoveredWallet(row: DbDiscoveredWallet): DiscoveredWallet {
     openPositionCount: row.open_position_count,
     openPositionValue: row.open_position_value,
     openPositionPnlApprox: row.open_position_pnl_approx,
+    resolvedMarkets: row.resolved_markets,
+    resolvedWins: row.resolved_wins,
+    resolvedLosses: row.resolved_losses,
+    resolvedWinRate: row.resolved_win_rate,
     flags: JSON.parse(row.flags_json) as string[],
     firstSeenAt: row.first_seen_at,
     lastSeenAt: row.last_seen_at
   };
+}
+
+function rowToWalletTrade(row: DbWalletTrade): WalletTrade {
+  return {
+    wallet: row.wallet,
+    marketId: row.market_id,
+    conditionId: row.condition_id ?? undefined,
+    tokenId: row.token_id ?? undefined,
+    outcome: row.outcome,
+    side: row.side,
+    price: row.price,
+    size: row.size,
+    timestamp: row.timestamp,
+    raw: row.raw_json ? JSON.parse(row.raw_json) as unknown : undefined
+  };
+}
+
+function walletTradeId(trade: WalletTrade): string {
+  return [
+    trade.wallet.toLowerCase(),
+    trade.marketId,
+    trade.conditionId ?? "",
+    trade.tokenId ?? "",
+    trade.outcome,
+    trade.side,
+    trade.price,
+    trade.size,
+    trade.timestamp
+  ].join("|");
 }
 
 function rowToAgentEvent(row: DbAgentEvent): AgentEvent {

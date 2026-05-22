@@ -125,6 +125,19 @@ sell proceeds - average cost of sold shares
 
 This is not perfect historical accounting yet. It does not fully account for unresolved positions, all historical fills, rewards, fees, transfers, or positions opened before the data window.
 
+## Stored History And Resolved Outcomes
+
+StratiFi stores normalized wallet trades in SQLite. Fresh API trades are deduped and merged with previous observations before scoring, so source profiles can improve across scans.
+
+When market resolution data is available, StratiFi also tracks:
+
+- Resolved markets
+- Resolved wins
+- Resolved losses
+- Resolved win rate
+
+This is separate from approximate buy/sell PnL. A wallet can sell profitably before resolution, hold a winning outcome to resolution, or look good in raw PnL while still being hard to copy. StratiFi keeps those concepts separate so later backtests can compare raw wallet quality against realistic copy performance.
+
 ## Known Limitations
 
 Current scoring is useful for discovery, but it is not final-grade wallet intelligence yet.
@@ -133,7 +146,7 @@ Main limitations:
 
 - Recent trade windows may miss older entries or exits.
 - Unrealized PnL is not fully reconciled.
-- Market resolution outcomes are not yet used for final win/loss truth.
+- Market resolution outcomes are only used when the provider payload includes resolution data.
 - Copy delay and order-book slippage are only handled in the paper execution layer, not in historical wallet ranking.
 - Wallets can look good during one market regime and degrade later.
 
@@ -142,8 +155,8 @@ Main limitations:
 The next scoring upgrades should be:
 
 - Pull deeper wallet history for top candidates.
+- Backfill resolved markets for older wallet positions.
 - Reconstruct full positions per market/outcome.
-- Include resolved market outcomes.
 - Backtest “copy after detection” instead of raw wallet PnL.
 - Track wallet degradation over time.
 - Store deeper per-category source history.

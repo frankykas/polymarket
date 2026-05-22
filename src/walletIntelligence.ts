@@ -37,6 +37,7 @@ export function discoverWallets(
   markets: MarketSnapshot[] = []
 ): DiscoveredWallet[] {
   const categoryByMarket = buildCategoryIndex(markets);
+  const resolutionByMarket = buildResolutionIndex(markets);
   const positionsByWallet = new Map<string, WalletPosition[]>();
   for (const position of positions) {
     const list = positionsByWallet.get(position.wallet) ?? [];
@@ -61,6 +62,7 @@ export function discoverWallets(
     const buyCount = sorted.filter((trade) => trade.side === "BUY").length;
     const sellCount = sorted.filter((trade) => trade.side === "SELL").length;
     const performance = analyzeWalletPerformance(sorted);
+    const resolvedStats = analyzeResolvedOutcomes(sorted, resolutionByMarket);
     const categoryProfiles = buildCategoryProfiles(sorted, categoryByMarket);
     const dominantProfile = categoryProfiles[0] ?? {
       category: "other" as MarketCategory,
@@ -129,6 +131,10 @@ export function discoverWallets(
       openPositionCount: walletPositions.length,
       openPositionValue: walletPositions.reduce((sum, position) => sum + position.currentValue, 0),
       openPositionPnlApprox: walletPositions.reduce((sum, position) => sum + position.cashPnl, 0),
+      resolvedMarkets: resolvedStats.resolvedMarkets,
+      resolvedWins: resolvedStats.resolvedWins,
+      resolvedLosses: resolvedStats.resolvedLosses,
+      resolvedWinRate: resolvedStats.resolvedWinRate,
       flags,
       firstSeenAt: sorted[0]?.timestamp ?? now,
       lastSeenAt: sorted[sorted.length - 1]?.timestamp ?? now
@@ -178,6 +184,10 @@ export function scoreWallet(wallet: TrackedWallet, trades: WalletTrade[], now = 
     label: wallet.label,
     score: Math.max(0, Math.min(100, Math.round(score))),
     sampleConfidence,
+    resolvedMarkets: 0,
+    resolvedWins: 0,
+    resolvedLosses: 0,
+    resolvedWinRate: 0,
     tradeCount,
     recentTradeCount,
     reliability: score >= 70 && sampleConfidence >= 0.65 ? "HIGH" : score >= 55 ? "MEDIUM" : "LOW",
@@ -199,6 +209,10 @@ export function scoreDiscoveredWallet(wallet: DiscoveredWallet, now = Date.now()
     categoryConsistencyScore: wallet.categoryConsistencyScore,
     sampleConfidence: wallet.sampleConfidence,
     dominantCategory: wallet.dominantCategory,
+    resolvedMarkets: wallet.resolvedMarkets,
+    resolvedWins: wallet.resolvedWins,
+    resolvedLosses: wallet.resolvedLosses,
+    resolvedWinRate: wallet.resolvedWinRate,
     tradeCount: wallet.tradeCount,
     recentTradeCount: 0,
     reliability: wallet.copyabilityScore >= 70 && wallet.sampleConfidence >= 0.65 ? "HIGH" : wallet.copyabilityScore >= 55 ? "MEDIUM" : "LOW",
@@ -392,6 +406,60 @@ function buildCategoryIndex(markets: MarketSnapshot[]): Map<string, MarketCatego
     if (market.conditionId) index.set(market.conditionId, category);
   }
   return index;
+}
+
+interface MarketResolution {
+  resolved: boolean;
+  winningOutcome?: string;
+}
+
+function buildResolutionIndex(markets: MarketSnapshot[]): Map<string, MarketResolution> {
+  const index = new Map<string, MarketResolution>();
+  for (const market of markets) {
+    const resolution = {
+      resolved: Boolean(market.resolved),
+      winningOutcome: market.winningOutcome
+    };
+    index.set(market.id, resolution);
+    if (market.conditionId) index.set(market.conditionId, resolution);
+  }
+  return index;
+}
+
+function analyzeResolvedOutcomes(
+  trades: WalletTrade[],
+  resolutionByMarket: Map<string, MarketResolution>
+): { resolvedMarkets: number; resolvedWins: number; resolvedLosses: number; resolvedWinRate: number } {
+  const exposureByMarketOutcome = new Map<string, { marketId: string; outcome: string; netSize: number }>();
+  for (const trade of trades) {
+    const key = `${trade.marketId}:${trade.outcome.toLowerCase()}`;
+    const current = exposureByMarketOutcome.get(key) ?? { marketId: trade.marketId, outcome: trade.outcome, netSize: 0 };
+    current.netSize += trade.side === "BUY" ? trade.size : -trade.size;
+    exposureByMarketOutcome.set(key, current);
+  }
+
+  const resolvedMarkets = new Map<string, "WIN" | "LOSS">();
+  for (const exposure of exposureByMarketOutcome.values()) {
+    if (exposure.netSize <= 0) continue;
+    const resolution = resolutionByMarket.get(exposure.marketId);
+    if (!resolution?.resolved || !resolution.winningOutcome) continue;
+    const outcomeWon = normalizeOutcome(exposure.outcome) === normalizeOutcome(resolution.winningOutcome);
+    resolvedMarkets.set(exposure.marketId, outcomeWon ? "WIN" : "LOSS");
+  }
+
+  const resolvedWins = [...resolvedMarkets.values()].filter((result) => result === "WIN").length;
+  const resolvedLosses = [...resolvedMarkets.values()].filter((result) => result === "LOSS").length;
+  const total = resolvedWins + resolvedLosses;
+  return {
+    resolvedMarkets: total,
+    resolvedWins,
+    resolvedLosses,
+    resolvedWinRate: total > 0 ? resolvedWins / total : 0
+  };
+}
+
+function normalizeOutcome(value: string): string {
+  return value.trim().toLowerCase();
 }
 
 function inferMarketCategory(market: MarketSnapshot): MarketCategory {
