@@ -15,7 +15,12 @@ import {
 import { AgentEventWriter } from "../src/events/eventWriter.js";
 import { buildStrategyProfiles } from "../src/profiles/profiles.js";
 import { publicWalletPreviews } from "../src/public/readModels.js";
-import { runShadowBacktest, summarizeShadowBacktest, summarizeShadowPerformanceByWallet } from "../src/shadowBacktest.js";
+import {
+  runShadowBacktest,
+  summarizeShadowBacktest,
+  summarizeShadowPerformanceByWallet,
+  summarizeShadowPerformanceByWalletAndCategory
+} from "../src/shadowBacktest.js";
 import type { BotConfig, MarketSnapshot, OrderBookSnapshot, TradeSignal, WalletTrade } from "../src/types.js";
 
 const config: BotConfig = {
@@ -596,6 +601,57 @@ test("shadow performance adjusts wallet source score", () => {
   assert.ok((adjusted.shadowScoreImpact ?? 0) > 0);
   assert.ok(adjusted.score > 60);
   assert.equal(adjusted.shadowSimulated, 1);
+});
+
+test("category shadow performance can boost matching market signals", () => {
+  const cryptoMarket = {
+    ...market,
+    question: "Will Bitcoin close above 100k?",
+    slug: "bitcoin-close-above-100k"
+  };
+  const trades = [{
+    wallet: "0xshadow",
+    marketId: "m1",
+    tokenId: "yes-token",
+    outcome: "YES",
+    side: "BUY" as const,
+    price: 0.5,
+    size: 20,
+    timestamp: 1000
+  }, {
+    wallet: "0xshadow",
+    marketId: "m1",
+    tokenId: "yes-token",
+    outcome: "YES",
+    side: "SELL" as const,
+    price: 0.75,
+    size: 20,
+    timestamp: 1000 + config.shadowCopyDelayMs + 1000
+  }];
+  const shadow = runShadowBacktest("0xshadow", trades, [cryptoMarket], config, 5000);
+  const categoryPerformance = summarizeShadowPerformanceByWalletAndCategory(shadow).get("0xshadow:crypto");
+  assert.equal(categoryPerformance?.category, "crypto");
+
+  const plain = generateSignals(cryptoMarket, [book], [trades[0]], [{
+    wallet: "0xshadow",
+    score: 65,
+    tradeCount: 30,
+    recentTradeCount: 2,
+    reliability: "MEDIUM",
+    flags: [],
+    updatedAt: Date.now()
+  }], config)[0];
+  const boosted = generateSignals(cryptoMarket, [book], [trades[0]], [{
+    wallet: "0xshadow",
+    score: 65,
+    shadowCategoryImpacts: { crypto: 8 },
+    tradeCount: 30,
+    recentTradeCount: 2,
+    reliability: "MEDIUM",
+    flags: [],
+    updatedAt: Date.now()
+  }], config)[0];
+  assert.ok(boosted.confidence > plain.confidence);
 });
 
 test("database stores shadow trades and reports aggregate performance", () => {

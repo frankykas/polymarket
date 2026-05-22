@@ -1,6 +1,7 @@
 import type { BotDatabase } from "../db.js";
 import {
   applyShadowPerformanceToScore,
+  calculateShadowScoreImpact,
   discoverWallets,
   generateSignals,
   scoreDiscoveredWallet,
@@ -8,9 +9,10 @@ import {
 } from "../engines.js";
 import type { AgentEventWriter } from "../events/eventWriter.js";
 import type { PolymarketProvider } from "../providers/polymarketProvider.js";
-import { runShadowBacktest, summarizeShadowBacktest, summarizeShadowPerformanceByWallet } from "../shadowBacktest.js";
+import { runShadowBacktest, summarizeShadowBacktest, summarizeShadowPerformanceByWallet, summarizeShadowPerformanceByWalletAndCategory } from "../shadowBacktest.js";
 import type {
   BotConfig,
+  MarketCategory,
   MarketSnapshot,
   OrderBookSnapshot,
   ShadowWalletPerformance,
@@ -105,7 +107,11 @@ export class SignalAgent {
     const baseScores = mergeScores(configuredScores, discoveredScores);
     const shadowPerformance = this.runShadowBacktests(baseScores, walletTrades, historyMarkets, discoveryTrades);
     const scores = baseScores
-      .map((score) => applyShadowPerformanceToScore(score, shadowPerformance.get(score.wallet.toLowerCase())))
+      .map((score) => applyShadowPerformanceToScore(score, shadowPerformance.byWallet.get(score.wallet.toLowerCase())))
+      .map((score) => ({
+        ...score,
+        shadowCategoryImpacts: shadowPerformance.categoryImpacts.get(score.wallet.toLowerCase())
+      }))
       .sort((a, b) => b.score - a.score);
     for (const score of scores) {
       this.db.saveWalletScore(score);
@@ -114,7 +120,7 @@ export class SignalAgent {
         agent: "Signal Agent",
         message: "Source wallet scored.",
         payload: {
-      wallet: score.wallet,
+          wallet: score.wallet,
           label: score.label,
           score: score.score,
           copyabilityScore: score.copyabilityScore,
@@ -256,8 +262,8 @@ export class SignalAgent {
     walletTrades: Map<string, WalletTrade[]>,
     markets: MarketSnapshot[],
     discoveryTrades: WalletTrade[]
-  ): Map<string, ShadowWalletPerformance> {
-    if (!this.config.shadowBacktestEnabled) return new Map<string, ShadowWalletPerformance>();
+  ): ShadowPerformanceResult {
+    if (!this.config.shadowBacktestEnabled) return emptyShadowPerformance();
     const allObservedTrades = [...walletTrades.values()].flat().concat(discoveryTrades);
     const allShadowTrades = scores.flatMap((score) => {
       const trades = walletTrades.get(score.wallet.toLowerCase()) ?? [];
@@ -271,10 +277,12 @@ export class SignalAgent {
         allObservedTrades
       );
     });
-    if (allShadowTrades.length === 0) return new Map<string, ShadowWalletPerformance>();
+    if (allShadowTrades.length === 0) return emptyShadowPerformance();
     const saved = this.db.saveShadowTrades(allShadowTrades);
     const report = summarizeShadowBacktest(allShadowTrades);
     const byWallet = summarizeShadowPerformanceByWallet(allShadowTrades);
+    const byWalletAndCategory = summarizeShadowPerformanceByWalletAndCategory(allShadowTrades);
+    const categoryImpacts = buildCategoryImpactMap(byWalletAndCategory);
     this.events.write({
       type: "shadow.backtest_completed",
       agent: "Signal Agent",
@@ -290,8 +298,31 @@ export class SignalAgent {
         avgReturnPct: report.avgReturnPct
       }
     });
-    return byWallet;
+    return { byWallet, categoryImpacts };
   }
+}
+
+interface ShadowPerformanceResult {
+  byWallet: Map<string, ShadowWalletPerformance>;
+  categoryImpacts: Map<string, Partial<Record<MarketCategory, number>>>;
+}
+
+function emptyShadowPerformance(): ShadowPerformanceResult {
+  return {
+    byWallet: new Map<string, ShadowWalletPerformance>(),
+    categoryImpacts: new Map<string, Partial<Record<MarketCategory, number>>>()
+  };
+}
+
+function buildCategoryImpactMap(performance: Map<string, ShadowWalletPerformance>): Map<string, Partial<Record<MarketCategory, number>>> {
+  const impacts = new Map<string, Partial<Record<MarketCategory, number>>>();
+  for (const item of performance.values()) {
+    if (!item.category) continue;
+    const current = impacts.get(item.wallet) ?? {};
+    current[item.category] = calculateShadowScoreImpact(item);
+    impacts.set(item.wallet, current);
+  }
+  return impacts;
 }
 
 function marketIndex(markets: MarketSnapshot[]): Map<string, MarketSnapshot> {

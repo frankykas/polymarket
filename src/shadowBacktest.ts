@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import type { BotConfig, MarketSnapshot, ShadowBacktestReport, ShadowTrade, ShadowWalletPerformance, WalletTrade } from "./types.js";
+import type { BotConfig, MarketCategory, MarketSnapshot, ShadowBacktestReport, ShadowTrade, ShadowWalletPerformance, WalletTrade } from "./types.js";
+import { inferMarketCategory } from "./walletIntelligence.js";
 
 export function runShadowBacktest(
   wallet: string,
@@ -18,7 +19,7 @@ export function runShadowBacktest(
     if (trade.side !== "BUY") continue;
     const detectedAt = trade.timestamp + config.shadowCopyDelayMs;
     const market = marketById.get(trade.marketId) ?? marketById.get(trade.conditionId ?? "");
-    const base = baseShadowTrade(wallet, trade, detectedAt, config, now);
+    const base = baseShadowTrade(wallet, trade, detectedAt, config, now, market ? inferMarketCategory(market) : undefined);
     const simulatedEntryPrice = estimateCopyEntryPrice(trade.price, config);
 
     const sourceExit = sorted.find((candidate) =>
@@ -88,35 +89,58 @@ export function summarizeShadowPerformanceByWallet(trades: ShadowTrade[]): Map<s
 
   const performance = new Map<string, ShadowWalletPerformance>();
   for (const [wallet, walletTrades] of byWallet) {
-    const simulated = walletTrades.filter((trade) => trade.status === "SIMULATED");
-    const realized = simulated.filter((trade) =>
-      trade.exitReason === "source sell after detection" || trade.exitReason === "resolved market outcome"
-    );
-    const marked = simulated.filter((trade) => trade.exitReason === "latest observed mark");
-    const fallback = simulated.filter((trade) => trade.exitReason === "source price fallback");
-    const wins = simulated.filter((trade) => trade.pnl > 0).length;
-    const losses = simulated.filter((trade) => trade.pnl < 0).length;
-    performance.set(wallet, {
-      wallet,
-      total: walletTrades.length,
-      simulated: simulated.length,
-      realized: realized.length,
-      marked: marked.length,
-      fallback: fallback.length,
-      pnl: simulated.reduce((sum, trade) => sum + trade.pnl, 0),
-      realizedPnl: realized.reduce((sum, trade) => sum + trade.pnl, 0),
-      wins,
-      losses,
-      winRate: wins + losses > 0 ? wins / (wins + losses) : 0,
-      avgReturnPct: simulated.length > 0
-        ? simulated.reduce((sum, trade) => sum + trade.returnPct, 0) / simulated.length
-        : 0,
-      realizedAvgReturnPct: realized.length > 0
-        ? realized.reduce((sum, trade) => sum + trade.returnPct, 0) / realized.length
-        : 0
-    });
+    performance.set(wallet, summarizeWalletTrades(wallet, walletTrades));
   }
   return performance;
+}
+
+export function summarizeShadowPerformanceByWalletAndCategory(trades: ShadowTrade[]): Map<string, ShadowWalletPerformance> {
+  const grouped = new Map<string, ShadowTrade[]>();
+  for (const trade of trades) {
+    const category = trade.category ?? "other";
+    const key = `${trade.wallet}:${category}`;
+    const list = grouped.get(key) ?? [];
+    list.push(trade);
+    grouped.set(key, list);
+  }
+
+  const performance = new Map<string, ShadowWalletPerformance>();
+  for (const [key, categoryTrades] of grouped) {
+    const [wallet, category] = key.split(":") as [string, MarketCategory];
+    performance.set(key, summarizeWalletTrades(wallet, categoryTrades, category));
+  }
+  return performance;
+}
+
+function summarizeWalletTrades(wallet: string, walletTrades: ShadowTrade[], category?: MarketCategory): ShadowWalletPerformance {
+  const simulated = walletTrades.filter((trade) => trade.status === "SIMULATED");
+  const realized = simulated.filter((trade) =>
+    trade.exitReason === "source sell after detection" || trade.exitReason === "resolved market outcome"
+  );
+  const marked = simulated.filter((trade) => trade.exitReason === "latest observed mark");
+  const fallback = simulated.filter((trade) => trade.exitReason === "source price fallback");
+  const wins = simulated.filter((trade) => trade.pnl > 0).length;
+  const losses = simulated.filter((trade) => trade.pnl < 0).length;
+  return {
+    wallet,
+    category,
+    total: walletTrades.length,
+    simulated: simulated.length,
+    realized: realized.length,
+    marked: marked.length,
+    fallback: fallback.length,
+    pnl: simulated.reduce((sum, trade) => sum + trade.pnl, 0),
+    realizedPnl: realized.reduce((sum, trade) => sum + trade.pnl, 0),
+    wins,
+    losses,
+    winRate: wins + losses > 0 ? wins / (wins + losses) : 0,
+    avgReturnPct: simulated.length > 0
+      ? simulated.reduce((sum, trade) => sum + trade.returnPct, 0) / simulated.length
+      : 0,
+    realizedAvgReturnPct: realized.length > 0
+      ? realized.reduce((sum, trade) => sum + trade.returnPct, 0) / realized.length
+      : 0
+  };
 }
 
 function baseShadowTrade(
@@ -124,12 +148,14 @@ function baseShadowTrade(
   trade: WalletTrade,
   detectedAt: number,
   config: BotConfig,
-  now: number
+  now: number,
+  category?: MarketCategory
 ): Omit<ShadowTrade, "status"> {
   return {
     id: shadowTradeId(wallet, trade, detectedAt),
     wallet: wallet.toLowerCase(),
     marketId: trade.marketId,
+    category,
     tokenId: trade.tokenId,
     outcome: trade.outcome,
     sourceTimestamp: trade.timestamp,

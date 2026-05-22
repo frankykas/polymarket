@@ -23,7 +23,7 @@ interface WalletPerformance {
 
 export function applyShadowPerformanceToScore(score: WalletScore, performance?: ShadowWalletPerformance): WalletScore {
   if (!performance || performance.simulated === 0) return score;
-  const impact = shadowScoreImpact(performance);
+  const impact = calculateShadowScoreImpact(performance);
   const flags = [...score.flags];
   if (performance.simulated < 10) flags.push("SHADOW_LOW_SAMPLE");
   if (performance.fallback / performance.simulated > 0.75) flags.push("SHADOW_MOSTLY_FALLBACK_MARKS");
@@ -386,7 +386,7 @@ function copyabilityPenalty(flags: string[], performance: WalletPerformance): nu
   return penalty;
 }
 
-function shadowScoreImpact(performance: ShadowWalletPerformance): number {
+export function calculateShadowScoreImpact(performance: ShadowWalletPerformance): number {
   const sampleWeight = clamp(performance.simulated / 25, 0, 1);
   const realizedWeight = clamp(performance.realized / 10, 0, 1);
   const fallbackRatio = performance.simulated > 0 ? performance.fallback / performance.simulated : 0;
@@ -514,7 +514,7 @@ function normalizeOutcome(value: string): string {
   return value.trim().toLowerCase();
 }
 
-function inferMarketCategory(market: MarketSnapshot): MarketCategory {
+export function inferMarketCategory(market: MarketSnapshot): MarketCategory {
   const text = `${market.question} ${market.slug ?? ""}`.toLowerCase();
   if (/\b(election|president|senate|house|congress|trump|biden|poll|mayor|governor|democrat|republican|minister)\b/.test(text)) return "politics";
   if (/\b(nba|nfl|mlb|nhl|ufc|soccer|football|tennis|golf|cricket|team|championship|super bowl|world cup)\b/.test(text)) return "sports";

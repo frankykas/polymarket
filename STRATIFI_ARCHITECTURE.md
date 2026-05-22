@@ -125,6 +125,8 @@ The goal is to compare raw wallet quality against realistic copy performance. A 
 
 Shadow-copy performance now feeds back into Signal Agent source scoring. The score impact is capped, realized source/resolution exits are weighted more heavily than marks, and fallback-heavy samples are flagged as weaker evidence.
 
+Shadow trades also store inferred market category. The Signal Agent summarizes shadow-copy performance by wallet and category, then uses matching category impact as a small confidence adjustment when creating signals. This keeps a wallet's crypto edge from automatically inflating sports or politics signals.
+
 This gives us the foundation for the transparency dashboard, Telegram summaries, audit review, and future backtesting comparisons.
 
 ## Next Build Phases
@@ -132,6 +134,6 @@ This gives us the foundation for the transparency dashboard, Telegram summaries,
 1. Pull deeper paginated source history for top candidates.
 2. Add resolved-market lookup/backfill for older markets not present in active scans.
 3. Split Telegram into private admin commands and public alert-only mode.
-4. Track shadow-copy performance by category.
+4. Expose category shadow-copy performance in dashboard-safe read models.
 5. Build the dashboard against public read models and event feeds.
 6. Add live-trading interfaces only after paper trading has enough forward performance data.

@@ -240,6 +240,7 @@ export class BotDatabase {
         id TEXT PRIMARY KEY,
         wallet TEXT NOT NULL,
         market_id TEXT NOT NULL,
+        category TEXT,
         token_id TEXT,
         outcome TEXT NOT NULL,
         source_timestamp INTEGER NOT NULL,
@@ -261,6 +262,7 @@ export class BotDatabase {
     this.ensureDiscoveredWalletColumns();
     this.ensureWalletScoreColumns();
     this.ensureSourceScoreSnapshotColumns();
+    this.ensureShadowTradeColumns();
     this.ensureMarketColumns();
   }
 
@@ -334,6 +336,18 @@ export class BotDatabase {
     ];
     for (const [name, definition] of missing) {
       if (!columns.has(name)) this.db.exec(`ALTER TABLE source_score_snapshots ADD COLUMN ${name} ${definition}`);
+    }
+  }
+
+  private ensureShadowTradeColumns(): void {
+    const columns = new Set(
+      (this.db.prepare("PRAGMA table_info(shadow_trades)").all() as Array<{ name: string }>).map((column) => column.name)
+    );
+    const missing: Array<[string, string]> = [
+      ["category", "TEXT"]
+    ];
+    for (const [name, definition] of missing) {
+      if (!columns.has(name)) this.db.exec(`ALTER TABLE shadow_trades ADD COLUMN ${name} ${definition}`);
     }
   }
 
@@ -712,9 +726,9 @@ export class BotDatabase {
   saveShadowTrades(trades: ShadowTrade[]): number {
     const stmt = this.db.prepare(`
       INSERT OR REPLACE INTO shadow_trades
-      (id, wallet, market_id, token_id, outcome, source_timestamp, detected_at, source_price, simulated_entry_price,
+      (id, wallet, market_id, category, token_id, outcome, source_timestamp, detected_at, source_price, simulated_entry_price,
        simulated_exit_price, size_usd, pnl, return_pct, status, exit_reason, rejection_reason, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     let saved = 0;
     for (const trade of trades) {
@@ -722,6 +736,7 @@ export class BotDatabase {
         trade.id,
         trade.wallet,
         trade.marketId,
+        trade.category ?? null,
         trade.tokenId ?? null,
         trade.outcome,
         trade.sourceTimestamp,

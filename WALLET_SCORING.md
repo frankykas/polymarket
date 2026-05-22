@@ -105,6 +105,8 @@ For discovered wallets, StratiFi infers a market category from the market questi
 
 The dominant category is scored separately from overall reputation. A wallet can be useful in one category while being mediocre overall, and future signal scoring can use that category-specific strength instead of treating every market equally.
 
+Shadow-copy performance is also tracked by category. If a wallet has copied well in crypto, that can slightly improve confidence on crypto signals from that wallet. It does not automatically boost unrelated categories like sports or politics.
+
 ## Win Rate Adjustment
 
 Raw win rate is adjusted with a Wilson lower-bound estimate. In plain English: the bot treats small samples with skepticism.
@@ -159,6 +161,7 @@ Shadow-copy performance is now fed back into wallet source scores. The adjustmen
 - weak shadow-copy returns can demote a source
 - realized shadow exits count more than fallback marks
 - fallback-heavy samples are flagged as lower-quality evidence
+- category-matched shadow performance can slightly raise or lower signal confidence
 
 This keeps the bot from blindly rewarding raw wallet PnL when StratiFi cannot realistically copy the entry/exit path.
 

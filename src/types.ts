@@ -112,6 +112,7 @@ export interface WalletScore {
   shadowAvgReturnPct?: number;
   shadowWinRate?: number;
   shadowScoreImpact?: number;
+  shadowCategoryImpacts?: Partial<Record<MarketCategory, number>>;
   tradeCount: number;
   recentTradeCount: number;
   reliability: "LOW" | "MEDIUM" | "HIGH";
@@ -254,6 +255,7 @@ export interface ShadowTrade {
   id: string;
   wallet: string;
   marketId: string;
+  category?: MarketCategory;
   tokenId?: string;
   outcome: OutcomeSide;
   sourceTimestamp: number;
@@ -283,6 +285,7 @@ export interface ShadowBacktestReport {
 
 export interface ShadowWalletPerformance {
   wallet: string;
+  category?: MarketCategory;
   total: number;
   simulated: number;
   realized: number;

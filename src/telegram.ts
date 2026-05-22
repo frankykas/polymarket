@@ -51,6 +51,21 @@ export class TelegramAlerts {
     ].join("\n"));
   }
 
+  async sendRejectedSummary(input: { rejected: number; reasons: Map<string, number> }): Promise<void> {
+    const topReasons = [...input.reasons.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 4)
+      .map(([reason, count]) => `- <b>${count}</b> ${escapeHtml(reason)}`);
+    await this.send([
+      "ðŸ”´ <b>Rejected Signal Summary</b>",
+      "",
+      `Ignored: <b>${input.rejected}</b>`,
+      ...topReasons,
+      "",
+      "Approved buys are still sent one-by-one."
+    ].join("\n"));
+  }
+
   async sendExit(input: { outcome: string; marketId: string; reason: string }): Promise<void> {
     await this.send([
       "🟡 <b>Paper Exit</b>",

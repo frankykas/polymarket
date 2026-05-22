@@ -18,6 +18,7 @@ This file tracks the major features added while building StratiFi from the origi
   - source-price fallback
 - Added aggregate shadow PnL, win rate, average return, simulated count, and skipped count.
 - Fed per-wallet shadow-copy performance back into source scores.
+- Added per-category shadow-copy summaries and category-matched signal confidence adjustments.
 - Added score flags for weak shadow samples, fallback-heavy shadow evidence, and shadow under/outperformance.
 - Added tests for source exits, resolved exits, latest marks, broad market tape marks, fallback marks, and DB reporting.
 
@@ -75,6 +76,7 @@ This file tracks the major features added while building StratiFi from the origi
 
 - Added Telegram startup/status/scan/risk/wallet/performance commands.
 - Added formatted alerts for approved signals, rejected signals, fills/exits, pauses, resumes, and errors.
+- Reduced Telegram noise by grouping rejected trade candidates into one compact summary while keeping approved buys as individual alerts.
 - Confirmed public channels can use `@ChannelUsername` style chat IDs when the bot is an admin/member.
 
 ## Current Status
@@ -91,19 +93,15 @@ The current scanner can:
 - score wallets with category and sample-confidence controls
 - create wallet-alignment signals
 - run risk checks through strategy profiles
-- run shadow-copy backtests against source history
+- run shadow-copy backtests against source history and market categories
 - simulate paper orders and exits
 - report PnL and wallet intelligence through CLI and Telegram
 
 ## Next Planned Work
 
-The next major source-intelligence feature should track shadow-copy performance by category:
-
-- separate politics/sports/crypto/macro shadow performance
-- expose public-safe shadow performance in the dashboard
-- use category-specific shadow results in signal confidence
-
-After that, the next likely phase is splitting Telegram into:
+The next likely phase is splitting Telegram into:
 
 - private admin bot commands
 - public alert-only channel output
+
+The next dashboard feature should expose public-safe shadow performance by category without leaking source wallet addresses.

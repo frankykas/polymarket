@@ -117,6 +117,7 @@ class PolymarketPaperBot {
       result.discovered = signalState.discovered;
       result.scores = signalState.scores;
       if (options.placePaperOrders) this.ws.connect(signalState.markets.flatMap((market) => market.clobTokenIds));
+      const rejectedReasons = new Map<string, number>();
 
       for (const market of signalState.markets) {
         const books = await this.getBooksForMarket(market);
@@ -144,10 +145,17 @@ class PolymarketPaperBot {
           } else {
             result.rejected += 1;
             if (signal.decision === "TRADE_CANDIDATE") {
-              await this.telegram.sendRejected({ question: market.question, reason: risk.reason });
+              rejectedReasons.set(risk.reason, (rejectedReasons.get(risk.reason) ?? 0) + 1);
             }
           }
         }
+      }
+
+      if (options.placePaperOrders && rejectedReasons.size > 0) {
+        await this.telegram.sendRejectedSummary({
+          rejected: [...rejectedReasons.values()].reduce((sum, count) => sum + count, 0),
+          reasons: rejectedReasons
+        });
       }
 
       if (options.placePaperOrders) this.monitorOpenPositions();

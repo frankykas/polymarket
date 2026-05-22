@@ -1,5 +1,5 @@
 import { randomId } from "./db.js";
-import { applyShadowPerformanceToScore, discoverWallets, scoreDiscoveredWallet, scoreWallet } from "./walletIntelligence.js";
+import { applyShadowPerformanceToScore, calculateShadowScoreImpact, discoverWallets, inferMarketCategory, scoreDiscoveredWallet, scoreWallet } from "./walletIntelligence.js";
 import type {
   BotConfig,
   ExitDecision,
@@ -16,7 +16,7 @@ import type {
   WalletTrade
 } from "./types.js";
 
-export { applyShadowPerformanceToScore, discoverWallets, scoreDiscoveredWallet, scoreWallet };
+export { applyShadowPerformanceToScore, calculateShadowScoreImpact, discoverWallets, inferMarketCategory, scoreDiscoveredWallet, scoreWallet };
 
 export function evaluateMarketQuality(
   market: MarketSnapshot,
@@ -81,13 +81,18 @@ export function generateSignals(
     const limitPrice = book?.bestAsk ?? alignedTrades[alignedTrades.length - 1]?.price ?? 0;
     if (limitPrice <= 0) continue;
 
+    const marketCategory = inferMarketCategory(market);
     const walletComponent = Math.min(40, alignedWallets.length * 20);
     const scoreComponent = Math.min(
       35,
       alignedWallets.reduce((sum, wallet) => sum + (scoreByWallet.get(wallet)?.score ?? 0), 0) / alignedWallets.length * 0.35
     );
     const priceComponent = Math.max(0, 25 - Math.max(0, limitPrice - 0.5) * 20);
-    const confidence = Math.round(Math.min(100, walletComponent + scoreComponent + priceComponent));
+    const categoryShadowComponent = alignedWallets.reduce((sum, wallet) => {
+      const impact = scoreByWallet.get(wallet)?.shadowCategoryImpacts?.[marketCategory] ?? 0;
+      return sum + Math.max(-8, Math.min(8, impact));
+    }, 0) / alignedWallets.length;
+    const confidence = Math.round(Math.min(100, Math.max(0, walletComponent + scoreComponent + priceComponent + categoryShadowComponent)));
 
     signals.push({
       id: randomId("sig"),
@@ -100,7 +105,7 @@ export function generateSignals(
       confidence,
       limitPrice,
       alignedWallets,
-      reason: `${alignedWallets.length} scored wallet(s) bought ${outcome}`,
+      reason: `${alignedWallets.length} scored wallet(s) bought ${outcome} in ${marketCategory}`,
       createdAt: Date.now()
     });
   }
