@@ -5,6 +5,7 @@ export type AgentName = "Signal Agent" | "Risk Mitigation Agent" | "Overseer Age
 export type EventVisibility = "PUBLIC" | "PRIVATE";
 export type StrategyProfileName = "Conservative" | "Aggressive";
 export type RiskStateLabel = "SAFE" | "WARNING" | "HIGH_RISK";
+export type MarketCategory = "politics" | "sports" | "crypto" | "macro" | "company" | "culture" | "other";
 
 export interface AgentEvent {
   id: string;
@@ -62,6 +63,11 @@ export interface DiscoveredWallet {
   address: string;
   score: number;
   copyabilityScore: number;
+  hotScore: number;
+  categoryConsistencyScore: number;
+  exitBehaviorScore: number;
+  sampleConfidence: number;
+  dominantCategory: MarketCategory;
   tradeCount: number;
   buyCount: number;
   sellCount: number;
@@ -86,6 +92,11 @@ export interface WalletScore {
   wallet: string;
   label?: string;
   score: number;
+  copyabilityScore?: number;
+  hotScore?: number;
+  categoryConsistencyScore?: number;
+  sampleConfidence?: number;
+  dominantCategory?: MarketCategory;
   tradeCount: number;
   recentTradeCount: number;
   reliability: "LOW" | "MEDIUM" | "HIGH";

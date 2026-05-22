@@ -80,14 +80,14 @@ const book: OrderBookSnapshot = {
 };
 
 test("wallet scoring flags low-sample wallets and scores active wallets higher", () => {
-  const trades: WalletTrade[] = Array.from({ length: 10 }, (_, index) => ({
+  const trades: WalletTrade[] = Array.from({ length: 20 }, (_, index) => ({
     wallet: "0xabc",
     marketId: `m${index % 3}`,
     outcome: "YES",
-    side: "BUY",
-    price: 0.5,
+    side: index < 10 ? "BUY" : "SELL",
+    price: index < 10 ? 0.45 : 0.58,
     size: 10,
-    timestamp: Date.now()
+    timestamp: Date.now() + index * 60_000
   }));
   const score = scoreWallet({ address: "0xabc", enabled: true }, trades);
   assert.equal(score.reliability, "HIGH");
@@ -118,8 +118,10 @@ test("wallet discovery ranks active repeat traders and filters tiny samples", ()
   const wallets = discoverWallets(trades, config);
   assert.equal(wallets.length, 1);
   assert.equal(wallets[0].address, "0xgood");
-  assert.ok(wallets[0].score > 50);
-  assert.ok(wallets[0].copyabilityScore > 40);
+  assert.ok(wallets[0].score > 35);
+  assert.ok(wallets[0].copyabilityScore > 20);
+  assert.equal(wallets[0].dominantCategory, "other");
+  assert.ok(wallets[0].sampleConfidence > 0);
   assert.ok(wallets[0].winRateApprox > 0);
   assert.ok(wallets[0].avgReturnPctApprox > 0);
   assert.ok(wallets[0].avgHoldMinutesApprox >= 0);
@@ -148,6 +150,63 @@ test("wallet discovery can include open position previews", () => {
   assert.equal(wallets[0].openPositionCount, 1);
   assert.equal(wallets[0].openPositionValue, 28);
   assert.equal(wallets[0].openPositionPnlApprox, 8);
+});
+
+test("wallet discovery caps tiny perfect win-rate samples", () => {
+  const looseConfig = { ...config, minDiscoveryTrades: 1, minDiscoveryVolume: 1 };
+  const trades: WalletTrade[] = [
+    {
+      wallet: "0xtinywinner",
+      marketId: "m1",
+      outcome: "YES",
+      side: "BUY",
+      price: 0.4,
+      size: 10,
+      timestamp: Date.now()
+    },
+    {
+      wallet: "0xtinywinner",
+      marketId: "m1",
+      outcome: "YES",
+      side: "SELL",
+      price: 0.6,
+      size: 10,
+      timestamp: Date.now() + 60_000
+    },
+    {
+      wallet: "0xtinywinner",
+      marketId: "m2",
+      outcome: "YES",
+      side: "BUY",
+      price: 0.4,
+      size: 10,
+      timestamp: Date.now() + 120_000
+    }
+  ];
+  const wallets = discoverWallets(trades, looseConfig);
+  assert.equal(wallets.length, 1);
+  assert.ok(wallets[0].score <= 45);
+  assert.ok(wallets[0].sampleConfidence < 0.2);
+  assert.ok(wallets[0].flags.includes("WEAK_EVIDENCE"));
+});
+
+test("wallet discovery infers dominant market category", () => {
+  const trades: WalletTrade[] = Array.from({ length: 8 }, (_, index) => ({
+    wallet: "0xpolitics",
+    marketId: "election-market",
+    outcome: "YES",
+    side: index < 4 ? "BUY" as const : "SELL" as const,
+    price: index < 4 ? 0.4 : 0.58,
+    size: 20,
+    timestamp: Date.now() + index * 60_000
+  }));
+  const wallets = discoverWallets(trades, config, Date.now(), [], [{
+    ...market,
+    id: "election-market",
+    question: "Will a Republican win the presidential election?"
+  }]);
+  assert.equal(wallets[0].dominantCategory, "politics");
+  assert.ok(wallets[0].categoryConsistencyScore > 0);
 });
 
 test("market quality rejects wide spread and low liquidity", () => {
@@ -271,6 +330,11 @@ test("public wallet previews do not expose wallet addresses", () => {
     address: "0xprivate",
     score: 90,
     copyabilityScore: 88,
+    hotScore: 70,
+    categoryConsistencyScore: 75,
+    exitBehaviorScore: 65,
+    sampleConfidence: 0.9,
+    dominantCategory: "politics",
     tradeCount: 30,
     buyCount: 20,
     sellCount: 10,

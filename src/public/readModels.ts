@@ -3,6 +3,10 @@ import type { AgentEvent, DiscoveredWallet, PerformanceReport, TradeSignal } fro
 export interface PublicWalletPreview {
   rank: number;
   sourceStrength: number;
+  categoryStrength: number;
+  hotness: number;
+  sampleConfidence: number;
+  category: string;
   tradeCount: number;
   uniqueMarkets: number;
   volumeBand: "LOW" | "MEDIUM" | "HIGH";
@@ -13,6 +17,10 @@ export function publicWalletPreviews(wallets: DiscoveredWallet[]): PublicWalletP
   return wallets.map((wallet, index) => ({
     rank: index + 1,
     sourceStrength: wallet.copyabilityScore,
+    categoryStrength: wallet.categoryConsistencyScore,
+    hotness: wallet.hotScore,
+    sampleConfidence: wallet.sampleConfidence,
+    category: wallet.dominantCategory,
     tradeCount: wallet.tradeCount,
     uniqueMarkets: wallet.uniqueMarkets,
     volumeBand: wallet.totalVolume >= 10000 ? "HIGH" : wallet.totalVolume >= 1000 ? "MEDIUM" : "LOW",

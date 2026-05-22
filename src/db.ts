@@ -43,6 +43,11 @@ export class BotDatabase {
         wallet TEXT PRIMARY KEY,
         label TEXT,
         score REAL NOT NULL,
+        copyability_score REAL,
+        hot_score REAL,
+        category_consistency_score REAL,
+        sample_confidence REAL,
+        dominant_category TEXT,
         trade_count INTEGER NOT NULL,
         recent_trade_count INTEGER NOT NULL,
         reliability TEXT NOT NULL,
@@ -53,6 +58,11 @@ export class BotDatabase {
         address TEXT PRIMARY KEY,
         score REAL NOT NULL,
         copyability_score REAL NOT NULL DEFAULT 0,
+        hot_score REAL NOT NULL DEFAULT 0,
+        category_consistency_score REAL NOT NULL DEFAULT 0,
+        exit_behavior_score REAL NOT NULL DEFAULT 0,
+        sample_confidence REAL NOT NULL DEFAULT 0,
+        dominant_category TEXT NOT NULL DEFAULT 'other',
         trade_count INTEGER NOT NULL,
         buy_count INTEGER NOT NULL,
         sell_count INTEGER NOT NULL,
@@ -182,6 +192,7 @@ export class BotDatabase {
       );
     `);
     this.ensureDiscoveredWalletColumns();
+    this.ensureWalletScoreColumns();
   }
 
   private ensureDiscoveredWalletColumns(): void {
@@ -190,6 +201,11 @@ export class BotDatabase {
     );
     const missing: Array<[string, string]> = [
       ["copyability_score", "REAL NOT NULL DEFAULT 0"],
+      ["hot_score", "REAL NOT NULL DEFAULT 0"],
+      ["category_consistency_score", "REAL NOT NULL DEFAULT 0"],
+      ["exit_behavior_score", "REAL NOT NULL DEFAULT 0"],
+      ["sample_confidence", "REAL NOT NULL DEFAULT 0"],
+      ["dominant_category", "TEXT NOT NULL DEFAULT 'other'"],
       ["win_rate_approx", "REAL NOT NULL DEFAULT 0"],
       ["avg_return_pct_approx", "REAL NOT NULL DEFAULT 0"],
       ["max_drawdown_approx", "REAL NOT NULL DEFAULT 0"],
@@ -200,6 +216,22 @@ export class BotDatabase {
     ];
     for (const [name, definition] of missing) {
       if (!columns.has(name)) this.db.exec(`ALTER TABLE discovered_wallets ADD COLUMN ${name} ${definition}`);
+    }
+  }
+
+  private ensureWalletScoreColumns(): void {
+    const columns = new Set(
+      (this.db.prepare("PRAGMA table_info(wallet_scores)").all() as Array<{ name: string }>).map((column) => column.name)
+    );
+    const missing: Array<[string, string]> = [
+      ["copyability_score", "REAL"],
+      ["hot_score", "REAL"],
+      ["category_consistency_score", "REAL"],
+      ["sample_confidence", "REAL"],
+      ["dominant_category", "TEXT"]
+    ];
+    for (const [name, definition] of missing) {
+      if (!columns.has(name)) this.db.exec(`ALTER TABLE wallet_scores ADD COLUMN ${name} ${definition}`);
     }
   }
 
@@ -214,12 +246,18 @@ export class BotDatabase {
   saveWalletScore(score: WalletScore): void {
     this.db.prepare(`
       INSERT OR REPLACE INTO wallet_scores
-      (wallet, label, score, trade_count, recent_trade_count, reliability, flags_json, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      (wallet, label, score, copyability_score, hot_score, category_consistency_score, sample_confidence, dominant_category,
+       trade_count, recent_trade_count, reliability, flags_json, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       score.wallet,
       score.label ?? null,
       score.score,
+      score.copyabilityScore ?? null,
+      score.hotScore ?? null,
+      score.categoryConsistencyScore ?? null,
+      score.sampleConfidence ?? null,
+      score.dominantCategory ?? null,
       score.tradeCount,
       score.recentTradeCount,
       score.reliability,
@@ -231,15 +269,21 @@ export class BotDatabase {
   saveDiscoveredWallet(wallet: DiscoveredWallet): void {
     this.db.prepare(`
       INSERT OR REPLACE INTO discovered_wallets
-      (address, score, copyability_score, trade_count, buy_count, sell_count, unique_markets, total_volume, avg_trade_size,
+      (address, score, copyability_score, hot_score, category_consistency_score, exit_behavior_score, sample_confidence,
+       dominant_category, trade_count, buy_count, sell_count, unique_markets, total_volume, avg_trade_size,
        realized_pnl_approx, profit_factor_approx, win_rate_approx, avg_return_pct_approx, max_drawdown_approx,
        avg_hold_minutes_approx, open_position_count, open_position_value, open_position_pnl_approx,
        flags_json, first_seen_at, last_seen_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       wallet.address,
       wallet.score,
       wallet.copyabilityScore,
+      wallet.hotScore,
+      wallet.categoryConsistencyScore,
+      wallet.exitBehaviorScore,
+      wallet.sampleConfidence,
+      wallet.dominantCategory,
       wallet.tradeCount,
       wallet.buyCount,
       wallet.sellCount,
@@ -492,6 +536,11 @@ interface DbDiscoveredWallet {
   address: string;
   score: number;
   copyability_score: number;
+  hot_score: number;
+  category_consistency_score: number;
+  exit_behavior_score: number;
+  sample_confidence: number;
+  dominant_category: DiscoveredWallet["dominantCategory"];
   trade_count: number;
   buy_count: number;
   sell_count: number;
@@ -543,6 +592,11 @@ function rowToDiscoveredWallet(row: DbDiscoveredWallet): DiscoveredWallet {
     address: row.address,
     score: row.score,
     copyabilityScore: row.copyability_score,
+    hotScore: row.hot_score,
+    categoryConsistencyScore: row.category_consistency_score,
+    exitBehaviorScore: row.exit_behavior_score,
+    sampleConfidence: row.sample_confidence,
+    dominantCategory: row.dominant_category,
     tradeCount: row.trade_count,
     buyCount: row.buy_count,
     sellCount: row.sell_count,

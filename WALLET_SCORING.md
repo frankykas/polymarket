@@ -61,24 +61,55 @@ This means a 3-for-3 wallet should not automatically rank well. It needs enough 
 
 ## Score Components
 
-The current discovery score is built from:
+The current discovery score is now split into four components:
 
-- Sample size
-- Volume
-- Market breadth
-- Recent activity
-- Approximate realized PnL
-- Approximate win rate
-- Drawdown penalty
-- Speed penalty
+- **Overall reputation:** broad wallet quality across all sampled trades.
+- **Category consistency:** whether the wallet appears repeatable in its dominant market category, such as politics, sports, crypto, macro, company, or culture.
+- **Hot score:** recent activity, recent volume, and recency of the latest trade.
+- **Exit behavior:** whether the wallet has sell history and holds long enough to be copyable.
 
-Then StratiFi computes a separate copyability score by penalizing:
+The copyability score combines those components and then applies penalties:
 
 - Single-market concentration
 - Very fast trading
 - Short average hold time
+- No sell history
+- Weak evidence
+- High drawdown
 
 Wallets are sorted primarily by copyability score, then performance score, then volume.
+
+## Evidence Caps
+
+StratiFi now caps scores when evidence is weak:
+
+- Fewer than 5 trades cannot rank as a strong wallet.
+- Fewer than 10 trades remain capped even if the win rate is perfect.
+- Fewer than 20 trades are flagged as under the preferred category sample.
+- Fewer than 3 closed trades are capped because realized performance is not trustworthy.
+- Wallets with no sell history are capped because exits are unknown.
+
+This is how the bot avoids overrating a wallet that went 3-for-3 on easy trades.
+
+## Category Consistency
+
+For discovered wallets, StratiFi infers a market category from the market question and slug. The current categories are:
+
+- Politics
+- Sports
+- Crypto
+- Macro
+- Company
+- Culture
+- Other
+
+The dominant category is scored separately from overall reputation. A wallet can be useful in one category while being mediocre overall, and future signal scoring can use that category-specific strength instead of treating every market equally.
+
+## Win Rate Adjustment
+
+Raw win rate is adjusted with a Wilson lower-bound estimate. In plain English: the bot treats small samples with skepticism.
+
+A wallet with 3 wins out of 3 trades does not get the same win-quality credit as a wallet with 60 wins out of 80 trades. This makes the ranking less exciting but much harder to fool.
 
 ## Approximate PnL Method
 
@@ -115,7 +146,7 @@ The next scoring upgrades should be:
 - Include resolved market outcomes.
 - Backtest “copy after detection” instead of raw wallet PnL.
 - Track wallet degradation over time.
-- Split scores by category, such as politics, crypto, sports, and macro.
+- Store deeper per-category source history.
 - Demote wallets whose paper-copy performance underperforms their raw historical score.
 
 The long-term goal is simple: StratiFi should not ask “who made money?” It should ask “who can we realistically follow, at our size, with our latency, through liquid markets, while protecting downside?”

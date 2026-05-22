@@ -3,6 +3,10 @@ import type { AgentEvent, DiscoveredWallet } from "../types.js";
 export interface AdminWalletPreview {
   address: string;
   sourceStrength: number;
+  categoryStrength: number;
+  hotness: number;
+  sampleConfidence: number;
+  category: string;
   score: number;
   tradeCount: number;
   uniqueMarkets: number;
@@ -16,6 +20,10 @@ export function adminWalletPreviews(wallets: DiscoveredWallet[]): AdminWalletPre
   return wallets.map((wallet) => ({
     address: wallet.address,
     sourceStrength: wallet.copyabilityScore,
+    categoryStrength: wallet.categoryConsistencyScore,
+    hotness: wallet.hotScore,
+    sampleConfidence: wallet.sampleConfidence,
+    category: wallet.dominantCategory,
     score: wallet.score,
     tradeCount: wallet.tradeCount,
     uniqueMarkets: wallet.uniqueMarkets,

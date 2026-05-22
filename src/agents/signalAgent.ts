@@ -48,7 +48,7 @@ export class SignalAgent {
     const discoveryTrades = this.config.discoveryEnabled ? await this.fetchDiscoveryTrades(watchedMarkets) : [];
     const walletPreviewPositions = this.config.discoveryEnabled ? await this.fetchPositionPreviews(discoveryTrades) : [];
     const discoveredWallets = this.config.discoveryEnabled
-      ? discoverWallets(discoveryTrades, this.config, Date.now(), walletPreviewPositions)
+      ? discoverWallets(discoveryTrades, this.config, Date.now(), walletPreviewPositions, watchedMarkets)
       : [];
     for (const wallet of discoveredWallets) {
       this.db.saveDiscoveredWallet(wallet);
@@ -59,6 +59,10 @@ export class SignalAgent {
         payload: {
           address: wallet.address,
           copyabilityScore: wallet.copyabilityScore,
+          categoryConsistencyScore: wallet.categoryConsistencyScore,
+          hotScore: wallet.hotScore,
+          sampleConfidence: wallet.sampleConfidence,
+          dominantCategory: wallet.dominantCategory,
           tradeCount: wallet.tradeCount,
           flags: wallet.flags
         }
@@ -89,6 +93,11 @@ export class SignalAgent {
           wallet: score.wallet,
           label: score.label,
           score: score.score,
+          copyabilityScore: score.copyabilityScore,
+          categoryConsistencyScore: score.categoryConsistencyScore,
+          hotScore: score.hotScore,
+          sampleConfidence: score.sampleConfidence,
+          dominantCategory: score.dominantCategory,
           reliability: score.reliability,
           flags: score.flags
         }

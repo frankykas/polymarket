@@ -216,7 +216,10 @@ class PolymarketPaperBot {
       console.log("No enabled wallets. Add addresses to config/wallets.json to generate wallet-following signals.");
     } else {
       for (const score of result.scores) {
-        console.log(`${score.wallet} score=${score.score} reliability=${score.reliability} trades=${score.tradeCount}`);
+        const details = score.dominantCategory
+          ? ` category=${score.dominantCategory} catScore=${score.categoryConsistencyScore ?? 0} hot=${score.hotScore ?? 0} evidence=${Math.round((score.sampleConfidence ?? 0) * 100)}%`
+          : "";
+        console.log(`${score.wallet} score=${score.score} reliability=${score.reliability} trades=${score.tradeCount}${details}`);
       }
     }
   }
@@ -313,6 +316,7 @@ class PolymarketPaperBot {
       ...wallets.flatMap((wallet, index) => [
         `<b>${index + 1}. Copy ${wallet.copyabilityScore}/100 | Score ${wallet.score}/100</b>`,
         `<code>${wallet.address}</code>`,
+        `Category ${wallet.dominantCategory} | Cat ${wallet.categoryConsistencyScore}/100 | Hot ${wallet.hotScore}/100 | Evidence ${(wallet.sampleConfidence * 100).toFixed(0)}%`,
         `Trades ${wallet.tradeCount} | Markets ${wallet.uniqueMarkets} | Vol $${wallet.totalVolume.toFixed(0)}`,
         `Open value~ $${wallet.openPositionValue.toFixed(2)} | Open PnL~ $${wallet.openPositionPnlApprox.toFixed(2)}`,
         `PnL~ $${wallet.realizedPnlApprox.toFixed(2)} | Win~ ${(wallet.winRateApprox * 100).toFixed(0)}% | Return~ ${(wallet.avgReturnPctApprox * 100).toFixed(1)}%`,
@@ -377,7 +381,7 @@ class PolymarketPaperBot {
     return [
       "🏆 <b>Top Wallet Preview</b>",
       ...wallets.map((wallet, index) =>
-        `${index + 1}. <code>${wallet.address}</code> copy=${wallet.copyabilityScore} trades=${wallet.tradeCount} open~$${wallet.openPositionValue.toFixed(0)} pnl~$${wallet.openPositionPnlApprox.toFixed(0)}`
+        `${index + 1}. <code>${wallet.address}</code> copy=${wallet.copyabilityScore} cat=${wallet.dominantCategory}/${wallet.categoryConsistencyScore} evidence=${(wallet.sampleConfidence * 100).toFixed(0)}% trades=${wallet.tradeCount}`
       )
     ];
   }
