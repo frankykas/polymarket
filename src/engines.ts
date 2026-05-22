@@ -305,8 +305,8 @@ export function decideRisk(signal: TradeSignal, quality: MarketQuality, state: R
   if (state.openExposure >= config.maxOpenExposure) return reject("REJECT", "max open exposure reached");
 
   const remainingExposure = Math.max(0, config.maxOpenExposure - state.openExposure);
-  const confidenceSize = signal.confidence >= 91 ? config.maxPositionSize : signal.confidence >= 81 ? Math.min(4, config.maxPositionSize) : Math.min(2, config.maxPositionSize);
-  const positionSize = Math.min(config.maxPositionSize, confidenceSize, remainingExposure);
+  const confidenceSize = signal.confidence >= 91 ? config.maxPositionSize : signal.confidence >= 81 ? Math.min(4, config.maxPositionSize) : config.minPositionSize;
+  const positionSize = Math.min(config.maxPositionSize, Math.max(config.minPositionSize, confidenceSize), remainingExposure);
   if (positionSize <= 0) return reject("REJECT", "no remaining exposure budget");
   return {
     decision: positionSize < confidenceSize ? "REDUCE_SIZE" : "APPROVE",

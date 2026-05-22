@@ -195,6 +195,7 @@ export interface PerformanceReport {
 export interface BotConfig {
   paperMode: true;
   bankroll: number;
+  minPositionSize: number;
   maxPositionSize: number;
   maxOpenExposure: number;
   maxDailyLoss: number;

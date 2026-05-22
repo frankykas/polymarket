@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "tsx index.ts dev",
     "scan": "tsx index.ts scan",
+    "performance": "tsx index.ts performance",
     "test": "node --import tsx --test tests/*.test.ts",
     "typecheck": "tsc --noEmit"
   },

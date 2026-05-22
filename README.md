@@ -26,6 +26,7 @@ Add wallets in `config/wallets.json` by setting `enabled` to `true` and replacin
 ```bash
 npm run scan       # one-shot scan, no paper orders
 npm run dev        # continuous paper bot loop
+npm run performance # local paper PnL report
 npm run test       # unit tests
 npm run typecheck  # TypeScript checks
 ```
@@ -59,3 +60,22 @@ Commands:
 ## Safety
 
 This project is paper trading only. It does not read private keys, derive API credentials, place live orders, or cancel live orders.
+
+## Position Sizing
+
+Edit `config/bot.json`:
+
+```json
+{
+  "bankroll": 200,
+  "minPositionSize": 2,
+  "maxPositionSize": 5,
+  "maxOpenExposure": 25,
+  "maxDailyLoss": 10
+}
+```
+
+- `minPositionSize`: smallest paper bet size in USDC.
+- `maxPositionSize`: largest paper bet size in USDC.
+- `maxOpenExposure`: maximum total open paper exposure.
+- `maxDailyLoss`: auto-pause/reject threshold for daily realized loss.

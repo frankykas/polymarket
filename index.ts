@@ -15,7 +15,7 @@ import {
 import { TelegramAlerts } from "./src/telegram.js";
 import type { MarketSnapshot, OrderBookSnapshot, PaperOrder, WalletScore, WalletTrade } from "./src/types.js";
 
-type Mode = "dev" | "scan";
+type Mode = "dev" | "scan" | "performance";
 
 interface CycleResult {
   markets: MarketSnapshot[];
@@ -64,6 +64,12 @@ class PolymarketPaperBot {
     if (mode === "scan") {
       const result = await this.runCycle({ placePaperOrders: false });
       this.printSummary(result);
+      this.db.close();
+      return;
+    }
+
+    if (mode === "performance") {
+      console.log(this.plainPerformanceReport());
       this.db.close();
       return;
     }
@@ -316,6 +322,7 @@ class PolymarketPaperBot {
       "🛡 <b>Risk Rules</b>",
       "",
       `Bankroll: <b>$${this.config.bankroll}</b>`,
+      `Min position: <b>$${this.config.minPositionSize}</b>`,
       `Max position: <b>$${this.config.maxPositionSize}</b>`,
       `Max open exposure: <b>$${this.config.maxOpenExposure}</b>`,
       `Daily loss stop: <b>$${this.config.maxDailyLoss}</b>`,
@@ -386,6 +393,24 @@ class PolymarketPaperBot {
     ].join("\n");
   }
 
+  private plainPerformanceReport(): string {
+    const report = this.db.getPerformanceReport();
+    return [
+      "StratiFi Paper Performance",
+      "",
+      `Total PnL: $${report.totalPnl.toFixed(2)}`,
+      `Realized: $${report.realizedPnl.toFixed(2)}`,
+      `Unrealized: $${report.unrealizedPnl.toFixed(2)}`,
+      `Open positions: ${report.openPositions}`,
+      `Closed positions: ${report.closedPositions}`,
+      `Win rate: ${(report.winRate * 100).toFixed(0)}%`,
+      `Wins/Losses: ${report.wins}/${report.losses}`,
+      `Signals: ${report.signals}`,
+      `Paper orders: ${report.paperOrders}`,
+      `Paper fills: ${report.paperFills}`
+    ].join("\n");
+  }
+
   private telegramPause(): string {
     this.paused = true;
     this.db.log("WARN", "bot paused from Telegram");
@@ -419,7 +444,8 @@ class PolymarketPaperBot {
   }
 }
 
-const mode = (process.argv[2] === "dev" ? "dev" : "scan") satisfies Mode;
+const arg = process.argv[2];
+const mode = (arg === "dev" || arg === "performance" ? arg : "scan") satisfies Mode;
 const bot = new PolymarketPaperBot();
 await bot.start(mode);
 

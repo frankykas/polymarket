@@ -14,6 +14,7 @@ import type { BotConfig, MarketSnapshot, OrderBookSnapshot, TradeSignal, WalletT
 const config: BotConfig = {
   paperMode: true,
   bankroll: 200,
+  minPositionSize: 2,
   maxPositionSize: 5,
   maxOpenExposure: 25,
   maxDailyLoss: 10,
