@@ -1,5 +1,6 @@
 import type { BotDatabase } from "../db.js";
 import {
+  applyShadowPerformanceToScore,
   discoverWallets,
   generateSignals,
   scoreDiscoveredWallet,
@@ -7,11 +8,12 @@ import {
 } from "../engines.js";
 import type { AgentEventWriter } from "../events/eventWriter.js";
 import type { PolymarketProvider } from "../providers/polymarketProvider.js";
-import { runShadowBacktest, summarizeShadowBacktest } from "../shadowBacktest.js";
+import { runShadowBacktest, summarizeShadowBacktest, summarizeShadowPerformanceByWallet } from "../shadowBacktest.js";
 import type {
   BotConfig,
   MarketSnapshot,
   OrderBookSnapshot,
+  ShadowWalletPerformance,
   TradeSignal,
   TrackedWallet,
   WalletScore,
@@ -100,8 +102,11 @@ export class SignalAgent {
     const configuredScores = wallets.map((wallet) =>
       scoreWallet(wallet, walletTrades.get(wallet.address.toLowerCase()) ?? [], Date.now(), historyMarkets)
     );
-    const scores = mergeScores(configuredScores, discoveredScores);
-    this.runShadowBacktests(scores, walletTrades, historyMarkets, discoveryTrades);
+    const baseScores = mergeScores(configuredScores, discoveredScores);
+    const shadowPerformance = this.runShadowBacktests(baseScores, walletTrades, historyMarkets, discoveryTrades);
+    const scores = baseScores
+      .map((score) => applyShadowPerformanceToScore(score, shadowPerformance.get(score.wallet.toLowerCase())))
+      .sort((a, b) => b.score - a.score);
     for (const score of scores) {
       this.db.saveWalletScore(score);
       this.events.write({
@@ -121,6 +126,11 @@ export class SignalAgent {
           resolvedWins: score.resolvedWins,
           resolvedLosses: score.resolvedLosses,
           resolvedWinRate: score.resolvedWinRate,
+          shadowSimulated: score.shadowSimulated,
+          shadowRealized: score.shadowRealized,
+          shadowPnl: score.shadowPnl,
+          shadowAvgReturnPct: score.shadowAvgReturnPct,
+          shadowScoreImpact: score.shadowScoreImpact,
           reliability: score.reliability,
           flags: score.flags
         }
@@ -246,8 +256,8 @@ export class SignalAgent {
     walletTrades: Map<string, WalletTrade[]>,
     markets: MarketSnapshot[],
     discoveryTrades: WalletTrade[]
-  ): void {
-    if (!this.config.shadowBacktestEnabled) return;
+  ): Map<string, ShadowWalletPerformance> {
+    if (!this.config.shadowBacktestEnabled) return new Map<string, ShadowWalletPerformance>();
     const allObservedTrades = [...walletTrades.values()].flat().concat(discoveryTrades);
     const allShadowTrades = scores.flatMap((score) => {
       const trades = walletTrades.get(score.wallet.toLowerCase()) ?? [];
@@ -261,9 +271,10 @@ export class SignalAgent {
         allObservedTrades
       );
     });
-    if (allShadowTrades.length === 0) return;
+    if (allShadowTrades.length === 0) return new Map<string, ShadowWalletPerformance>();
     const saved = this.db.saveShadowTrades(allShadowTrades);
     const report = summarizeShadowBacktest(allShadowTrades);
+    const byWallet = summarizeShadowPerformanceByWallet(allShadowTrades);
     this.events.write({
       type: "shadow.backtest_completed",
       agent: "Signal Agent",
@@ -279,6 +290,7 @@ export class SignalAgent {
         avgReturnPct: report.avgReturnPct
       }
     });
+    return byWallet;
   }
 }
 

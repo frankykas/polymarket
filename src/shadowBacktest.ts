@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { BotConfig, MarketSnapshot, ShadowBacktestReport, ShadowTrade, WalletTrade } from "./types.js";
+import type { BotConfig, MarketSnapshot, ShadowBacktestReport, ShadowTrade, ShadowWalletPerformance, WalletTrade } from "./types.js";
 
 export function runShadowBacktest(
   wallet: string,
@@ -76,6 +76,47 @@ export function summarizeShadowBacktest(trades: ShadowTrade[]): ShadowBacktestRe
       ? simulatedTrades.reduce((sum, trade) => sum + trade.returnPct, 0) / simulatedTrades.length
       : 0
   };
+}
+
+export function summarizeShadowPerformanceByWallet(trades: ShadowTrade[]): Map<string, ShadowWalletPerformance> {
+  const byWallet = new Map<string, ShadowTrade[]>();
+  for (const trade of trades) {
+    const list = byWallet.get(trade.wallet) ?? [];
+    list.push(trade);
+    byWallet.set(trade.wallet, list);
+  }
+
+  const performance = new Map<string, ShadowWalletPerformance>();
+  for (const [wallet, walletTrades] of byWallet) {
+    const simulated = walletTrades.filter((trade) => trade.status === "SIMULATED");
+    const realized = simulated.filter((trade) =>
+      trade.exitReason === "source sell after detection" || trade.exitReason === "resolved market outcome"
+    );
+    const marked = simulated.filter((trade) => trade.exitReason === "latest observed mark");
+    const fallback = simulated.filter((trade) => trade.exitReason === "source price fallback");
+    const wins = simulated.filter((trade) => trade.pnl > 0).length;
+    const losses = simulated.filter((trade) => trade.pnl < 0).length;
+    performance.set(wallet, {
+      wallet,
+      total: walletTrades.length,
+      simulated: simulated.length,
+      realized: realized.length,
+      marked: marked.length,
+      fallback: fallback.length,
+      pnl: simulated.reduce((sum, trade) => sum + trade.pnl, 0),
+      realizedPnl: realized.reduce((sum, trade) => sum + trade.pnl, 0),
+      wins,
+      losses,
+      winRate: wins + losses > 0 ? wins / (wins + losses) : 0,
+      avgReturnPct: simulated.length > 0
+        ? simulated.reduce((sum, trade) => sum + trade.returnPct, 0) / simulated.length
+        : 0,
+      realizedAvgReturnPct: realized.length > 0
+        ? realized.reduce((sum, trade) => sum + trade.returnPct, 0) / realized.length
+        : 0
+    });
+  }
+  return performance;
 }
 
 function baseShadowTrade(

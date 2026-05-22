@@ -228,7 +228,7 @@ class PolymarketPaperBot {
     } else {
       for (const score of result.scores) {
         const details = score.dominantCategory
-          ? ` category=${score.dominantCategory} catScore=${score.categoryConsistencyScore ?? 0} hot=${score.hotScore ?? 0} evidence=${Math.round((score.sampleConfidence ?? 0) * 100)}%`
+          ? ` category=${score.dominantCategory} catScore=${score.categoryConsistencyScore ?? 0} hot=${score.hotScore ?? 0} evidence=${Math.round((score.sampleConfidence ?? 0) * 100)}% shadow=${score.shadowScoreImpact ?? 0}`
           : "";
         console.log(`${score.wallet} score=${score.score} reliability=${score.reliability} trades=${score.tradeCount}${details}`);
       }

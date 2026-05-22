@@ -105,6 +105,13 @@ export interface WalletScore {
   resolvedWins?: number;
   resolvedLosses?: number;
   resolvedWinRate?: number;
+  shadowTradeCount?: number;
+  shadowSimulated?: number;
+  shadowRealized?: number;
+  shadowPnl?: number;
+  shadowAvgReturnPct?: number;
+  shadowWinRate?: number;
+  shadowScoreImpact?: number;
   tradeCount: number;
   recentTradeCount: number;
   reliability: "LOW" | "MEDIUM" | "HIGH";
@@ -272,6 +279,22 @@ export interface ShadowBacktestReport {
   losses: number;
   winRate: number;
   avgReturnPct: number;
+}
+
+export interface ShadowWalletPerformance {
+  wallet: string;
+  total: number;
+  simulated: number;
+  realized: number;
+  marked: number;
+  fallback: number;
+  pnl: number;
+  realizedPnl: number;
+  wins: number;
+  losses: number;
+  winRate: number;
+  avgReturnPct: number;
+  realizedAvgReturnPct: number;
 }
 
 export interface BotConfig {

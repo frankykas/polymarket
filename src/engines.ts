@@ -1,5 +1,5 @@
 import { randomId } from "./db.js";
-import { discoverWallets, scoreDiscoveredWallet, scoreWallet } from "./walletIntelligence.js";
+import { applyShadowPerformanceToScore, discoverWallets, scoreDiscoveredWallet, scoreWallet } from "./walletIntelligence.js";
 import type {
   BotConfig,
   ExitDecision,
@@ -16,7 +16,7 @@ import type {
   WalletTrade
 } from "./types.js";
 
-export { discoverWallets, scoreDiscoveredWallet, scoreWallet };
+export { applyShadowPerformanceToScore, discoverWallets, scoreDiscoveredWallet, scoreWallet };
 
 export function evaluateMarketQuality(
   market: MarketSnapshot,

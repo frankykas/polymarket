@@ -3,6 +3,7 @@ import type {
   DiscoveredWallet,
   MarketCategory,
   MarketSnapshot,
+  ShadowWalletPerformance,
   TrackedWallet,
   WalletPosition,
   WalletScore,
@@ -18,6 +19,34 @@ interface WalletPerformance {
   avgHoldMinutesApprox: number;
   closedTradeCount: number;
   wins: number;
+}
+
+export function applyShadowPerformanceToScore(score: WalletScore, performance?: ShadowWalletPerformance): WalletScore {
+  if (!performance || performance.simulated === 0) return score;
+  const impact = shadowScoreImpact(performance);
+  const flags = [...score.flags];
+  if (performance.simulated < 10) flags.push("SHADOW_LOW_SAMPLE");
+  if (performance.fallback / performance.simulated > 0.75) flags.push("SHADOW_MOSTLY_FALLBACK_MARKS");
+  if (impact <= -6) flags.push("SHADOW_COPY_UNDERPERFORMS");
+  if (impact >= 6) flags.push("SHADOW_COPY_OUTPERFORMS");
+  const adjustedScore = Math.round(clamp(score.score + impact, 0, 100));
+  const adjustedCopyability = score.copyabilityScore === undefined
+    ? undefined
+    : Math.round(clamp(score.copyabilityScore + impact * 1.15, 0, 100));
+  return {
+    ...score,
+    score: adjustedScore,
+    copyabilityScore: adjustedCopyability,
+    reliability: adjustedScore >= 70 && (score.sampleConfidence ?? 0) >= 0.65 ? "HIGH" : adjustedScore >= 55 ? "MEDIUM" : "LOW",
+    flags,
+    shadowTradeCount: performance.total,
+    shadowSimulated: performance.simulated,
+    shadowRealized: performance.realized,
+    shadowPnl: performance.pnl,
+    shadowAvgReturnPct: performance.avgReturnPct,
+    shadowWinRate: performance.winRate,
+    shadowScoreImpact: impact
+  };
 }
 
 interface CategoryProfile {
@@ -355,6 +384,17 @@ function copyabilityPenalty(flags: string[], performance: WalletPerformance): nu
   if (flags.includes("WEAK_EVIDENCE")) penalty += 8;
   penalty += Math.max(0, 20 - performance.avgHoldMinutesApprox) * 0.2;
   return penalty;
+}
+
+function shadowScoreImpact(performance: ShadowWalletPerformance): number {
+  const sampleWeight = clamp(performance.simulated / 25, 0, 1);
+  const realizedWeight = clamp(performance.realized / 10, 0, 1);
+  const fallbackRatio = performance.simulated > 0 ? performance.fallback / performance.simulated : 0;
+  const markQuality = 1 - fallbackRatio * 0.6;
+  const allTradeReturn = clamp(performance.avgReturnPct / 0.08, -1, 1) * 7 * sampleWeight * markQuality;
+  const realizedReturn = clamp(performance.realizedAvgReturnPct / 0.1, -1, 1) * 6 * realizedWeight;
+  const winRateTilt = clamp((performance.winRate - 0.5) / 0.35, -1, 1) * 3 * sampleWeight;
+  return Math.round(clamp(allTradeReturn + realizedReturn + winRateTilt, -15, 15));
 }
 
 function analyzeWalletPerformance(trades: WalletTrade[]): WalletPerformance {

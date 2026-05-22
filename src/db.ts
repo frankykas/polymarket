@@ -224,6 +224,13 @@ export class BotDatabase {
         resolved_wins INTEGER NOT NULL DEFAULT 0,
         resolved_losses INTEGER NOT NULL DEFAULT 0,
         resolved_win_rate REAL NOT NULL DEFAULT 0,
+        shadow_trade_count INTEGER,
+        shadow_simulated INTEGER,
+        shadow_realized INTEGER,
+        shadow_pnl REAL,
+        shadow_avg_return_pct REAL,
+        shadow_win_rate REAL,
+        shadow_score_impact REAL,
         trade_count INTEGER NOT NULL,
         reliability TEXT NOT NULL,
         flags_json TEXT NOT NULL,
@@ -253,6 +260,7 @@ export class BotDatabase {
     `);
     this.ensureDiscoveredWalletColumns();
     this.ensureWalletScoreColumns();
+    this.ensureSourceScoreSnapshotColumns();
     this.ensureMarketColumns();
   }
 
@@ -297,10 +305,35 @@ export class BotDatabase {
       ["resolved_markets", "INTEGER"],
       ["resolved_wins", "INTEGER"],
       ["resolved_losses", "INTEGER"],
-      ["resolved_win_rate", "REAL"]
+      ["resolved_win_rate", "REAL"],
+      ["shadow_trade_count", "INTEGER"],
+      ["shadow_simulated", "INTEGER"],
+      ["shadow_realized", "INTEGER"],
+      ["shadow_pnl", "REAL"],
+      ["shadow_avg_return_pct", "REAL"],
+      ["shadow_win_rate", "REAL"],
+      ["shadow_score_impact", "REAL"]
     ];
     for (const [name, definition] of missing) {
       if (!columns.has(name)) this.db.exec(`ALTER TABLE wallet_scores ADD COLUMN ${name} ${definition}`);
+    }
+  }
+
+  private ensureSourceScoreSnapshotColumns(): void {
+    const columns = new Set(
+      (this.db.prepare("PRAGMA table_info(source_score_snapshots)").all() as Array<{ name: string }>).map((column) => column.name)
+    );
+    const missing: Array<[string, string]> = [
+      ["shadow_trade_count", "INTEGER"],
+      ["shadow_simulated", "INTEGER"],
+      ["shadow_realized", "INTEGER"],
+      ["shadow_pnl", "REAL"],
+      ["shadow_avg_return_pct", "REAL"],
+      ["shadow_win_rate", "REAL"],
+      ["shadow_score_impact", "REAL"]
+    ];
+    for (const [name, definition] of missing) {
+      if (!columns.has(name)) this.db.exec(`ALTER TABLE source_score_snapshots ADD COLUMN ${name} ${definition}`);
     }
   }
 
@@ -329,8 +362,9 @@ export class BotDatabase {
     this.db.prepare(`
       INSERT OR REPLACE INTO wallet_scores
       (wallet, label, score, copyability_score, hot_score, category_consistency_score, sample_confidence, dominant_category,
-       resolved_markets, resolved_wins, resolved_losses, resolved_win_rate, trade_count, recent_trade_count, reliability, flags_json, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       resolved_markets, resolved_wins, resolved_losses, resolved_win_rate, shadow_trade_count, shadow_simulated, shadow_realized,
+       shadow_pnl, shadow_avg_return_pct, shadow_win_rate, shadow_score_impact, trade_count, recent_trade_count, reliability, flags_json, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       score.wallet,
       score.label ?? null,
@@ -344,6 +378,13 @@ export class BotDatabase {
       score.resolvedWins ?? null,
       score.resolvedLosses ?? null,
       score.resolvedWinRate ?? null,
+      score.shadowTradeCount ?? null,
+      score.shadowSimulated ?? null,
+      score.shadowRealized ?? null,
+      score.shadowPnl ?? null,
+      score.shadowAvgReturnPct ?? null,
+      score.shadowWinRate ?? null,
+      score.shadowScoreImpact ?? null,
       score.tradeCount,
       score.recentTradeCount,
       score.reliability,
@@ -732,8 +773,9 @@ export class BotDatabase {
     this.db.prepare(`
       INSERT INTO source_score_snapshots
       (id, wallet, score, copyability_score, hot_score, category_consistency_score, sample_confidence, dominant_category,
-       resolved_markets, resolved_wins, resolved_losses, resolved_win_rate, trade_count, reliability, flags_json, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       resolved_markets, resolved_wins, resolved_losses, resolved_win_rate, shadow_trade_count, shadow_simulated, shadow_realized,
+       shadow_pnl, shadow_avg_return_pct, shadow_win_rate, shadow_score_impact, trade_count, reliability, flags_json, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       randomId("score"),
       score.wallet,
@@ -747,6 +789,13 @@ export class BotDatabase {
       score.resolvedWins ?? 0,
       score.resolvedLosses ?? 0,
       score.resolvedWinRate ?? 0,
+      score.shadowTradeCount ?? null,
+      score.shadowSimulated ?? null,
+      score.shadowRealized ?? null,
+      score.shadowPnl ?? null,
+      score.shadowAvgReturnPct ?? null,
+      score.shadowWinRate ?? null,
+      score.shadowScoreImpact ?? null,
       score.tradeCount,
       score.reliability,
       JSON.stringify(score.flags),

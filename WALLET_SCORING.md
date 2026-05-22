@@ -153,7 +153,14 @@ Shadow exits are selected in this order:
 - Latest observed market-tape price after detection
 - Source-price fallback
 
-This is not yet part of the wallet score, but it is the next intended scoring input. A wallet with strong raw PnL but poor shadow-copy results should be demoted because StratiFi cannot realistically follow it.
+Shadow-copy performance is now fed back into wallet source scores. The adjustment is intentionally capped:
+
+- positive shadow-copy returns can modestly lift score and copyability
+- weak shadow-copy returns can demote a source
+- realized shadow exits count more than fallback marks
+- fallback-heavy samples are flagged as lower-quality evidence
+
+This keeps the bot from blindly rewarding raw wallet PnL when StratiFi cannot realistically copy the entry/exit path.
 
 ## Known Limitations
 
@@ -165,7 +172,7 @@ Main limitations:
 - Unrealized PnL is not fully reconciled.
 - Market resolution outcomes are only used when the provider payload includes resolution data.
 - Copy delay and order-book slippage are only handled in the paper execution layer, not in historical wallet ranking.
-- Shadow-copy results are tracked but not yet fed back into the score.
+- Shadow-copy results are score inputs, but marked/fallback-heavy samples are still weaker than realized exits.
 - Wallets can look good during one market regime and degrade later.
 
 ## Next Improvements

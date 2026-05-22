@@ -17,6 +17,8 @@ This file tracks the major features added while building StratiFi from the origi
   - latest observed market tape
   - source-price fallback
 - Added aggregate shadow PnL, win rate, average return, simulated count, and skipped count.
+- Fed per-wallet shadow-copy performance back into source scores.
+- Added score flags for weak shadow samples, fallback-heavy shadow evidence, and shadow under/outperformance.
 - Added tests for source exits, resolved exits, latest marks, broad market tape marks, fallback marks, and DB reporting.
 
 ### Source History And Market Backfill
@@ -95,12 +97,11 @@ The current scanner can:
 
 ## Next Planned Work
 
-The next major feature should feed shadow-copy results back into wallet scoring:
+The next major source-intelligence feature should track shadow-copy performance by category:
 
-- demote sources with poor shadow-copy PnL
-- separate realized shadow exits from marked/unrealized shadow results
-- track shadow performance by category
+- separate politics/sports/crypto/macro shadow performance
 - expose public-safe shadow performance in the dashboard
+- use category-specific shadow results in signal confidence
 
 After that, the next likely phase is splitting Telegram into:
 

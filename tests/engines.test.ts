@@ -4,6 +4,7 @@ import { unlinkSync } from "node:fs";
 import { BotDatabase } from "../src/db.js";
 import {
   PaperExecutionEngine,
+  applyShadowPerformanceToScore,
   decideExit,
   decideRisk,
   discoverWallets,
@@ -14,7 +15,7 @@ import {
 import { AgentEventWriter } from "../src/events/eventWriter.js";
 import { buildStrategyProfiles } from "../src/profiles/profiles.js";
 import { publicWalletPreviews } from "../src/public/readModels.js";
-import { runShadowBacktest, summarizeShadowBacktest } from "../src/shadowBacktest.js";
+import { runShadowBacktest, summarizeShadowBacktest, summarizeShadowPerformanceByWallet } from "../src/shadowBacktest.js";
 import type { BotConfig, MarketSnapshot, OrderBookSnapshot, TradeSignal, WalletTrade } from "../src/types.js";
 
 const config: BotConfig = {
@@ -557,8 +558,45 @@ test("shadow backtest falls back to source price when no later mark exists", () 
   assert.ok(shadow[0].pnl < 0);
 });
 
-
-
+test("shadow performance adjusts wallet source score", () => {
+  const trades = runShadowBacktest("0xshadow", [
+    {
+      wallet: "0xshadow",
+      marketId: "m1",
+      tokenId: "yes-token",
+      outcome: "YES",
+      side: "BUY",
+      price: 0.5,
+      size: 20,
+      timestamp: 1000
+    },
+    {
+      wallet: "0xshadow",
+      marketId: "m1",
+      tokenId: "yes-token",
+      outcome: "YES",
+      side: "SELL",
+      price: 0.7,
+      size: 20,
+      timestamp: 1000 + config.shadowCopyDelayMs + 1000
+    }
+  ], [market], config, 5000);
+  const performance = summarizeShadowPerformanceByWallet(trades).get("0xshadow");
+  const adjusted = applyShadowPerformanceToScore({
+    wallet: "0xshadow",
+    score: 60,
+    copyabilityScore: 60,
+    tradeCount: 20,
+    recentTradeCount: 5,
+    reliability: "MEDIUM",
+    flags: [],
+    sampleConfidence: 0.8,
+    updatedAt: Date.now()
+  }, performance);
+  assert.ok((adjusted.shadowScoreImpact ?? 0) > 0);
+  assert.ok(adjusted.score > 60);
+  assert.equal(adjusted.shadowSimulated, 1);
+});
 
 test("database stores shadow trades and reports aggregate performance", () => {
   const path = "data/test-shadow.sqlite";
