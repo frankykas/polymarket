@@ -17,6 +17,8 @@ import type {
   WalletTrade
 } from "../types.js";
 
+const MARKET_BACKFILL_LIMIT = 80;
+
 export interface SignalAgentResult {
   markets: MarketSnapshot[];
   scores: WalletScore[];
@@ -93,7 +95,10 @@ export class SignalAgent {
     this.db.syncWallets(trackedWallets);
 
     const walletTrades = await this.fetchWalletTrades(trackedWallets);
-    const configuredScores = wallets.map((wallet) => scoreWallet(wallet, walletTrades.get(wallet.address.toLowerCase()) ?? []));
+    const historyMarkets = await this.backfillMarketSnapshots([...walletTrades.values()].flat(), watchedMarkets);
+    const configuredScores = wallets.map((wallet) =>
+      scoreWallet(wallet, walletTrades.get(wallet.address.toLowerCase()) ?? [], Date.now(), historyMarkets)
+    );
     const scores = mergeScores(configuredScores, discoveredScores);
     for (const score of scores) {
       this.db.saveWalletScore(score);
@@ -110,6 +115,10 @@ export class SignalAgent {
           hotScore: score.hotScore,
           sampleConfidence: score.sampleConfidence,
           dominantCategory: score.dominantCategory,
+          resolvedMarkets: score.resolvedMarkets,
+          resolvedWins: score.resolvedWins,
+          resolvedLosses: score.resolvedLosses,
+          resolvedWinRate: score.resolvedWinRate,
           reliability: score.reliability,
           flags: score.flags
         }
@@ -195,6 +204,49 @@ export class SignalAgent {
     for (const wallet of wallets) positions.push(...await this.provider.getWalletPositions(wallet));
     return positions;
   }
+
+  private async backfillMarketSnapshots(trades: WalletTrade[], seedMarkets: MarketSnapshot[]): Promise<MarketSnapshot[]> {
+    const seedById = marketIndex(seedMarkets);
+    const ids = [...new Set(trades.flatMap((trade) => [trade.marketId, trade.conditionId]).filter((id): id is string => Boolean(id)))];
+    const cached = this.db.getMarketsByIds(ids);
+    const known = marketIndex([...seedMarkets, ...cached]);
+    const missing = ids.filter((id) => !known.has(id)).slice(0, MARKET_BACKFILL_LIMIT);
+    const fetched: MarketSnapshot[] = [];
+
+    for (const id of missing) {
+      const market = await this.provider.getMarketById(id);
+      if (!market) continue;
+      this.db.saveMarket(market);
+      fetched.push(market);
+      if (market.conditionId) known.set(market.conditionId, market);
+      known.set(market.id, market);
+    }
+
+    if (ids.length > 0) {
+      this.events.write({
+        type: "market.resolution_backfill_completed",
+        agent: "Signal Agent",
+        message: "Backfilled market snapshots for source history.",
+        payload: {
+          requestedMarkets: ids.length,
+          cachedMarkets: cached.length,
+          fetchedMarkets: fetched.length,
+          skippedByLimit: Math.max(0, ids.filter((id) => !seedById.has(id)).length - missing.length)
+        }
+      });
+    }
+
+    return [...new Map([...seedMarkets, ...cached, ...fetched].map((market) => [market.id, market])).values()];
+  }
+}
+
+function marketIndex(markets: MarketSnapshot[]): Map<string, MarketSnapshot> {
+  const index = new Map<string, MarketSnapshot>();
+  for (const market of markets) {
+    index.set(market.id, market);
+    if (market.conditionId) index.set(market.conditionId, market);
+  }
+  return index;
 }
 
 function mergeScores(configured: WalletScore[], discovered: WalletScore[]): WalletScore[] {

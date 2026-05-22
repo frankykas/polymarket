@@ -14,6 +14,10 @@ export class PolymarketProvider {
     return this.clients.gamma.getMarkets(limit);
   }
 
+  getMarketById(marketId: string): Promise<MarketSnapshot | undefined> {
+    return this.clients.gamma.getMarketById(marketId);
+  }
+
   getMarketTrades(marketId: string, limit: number): Promise<WalletTrade[]> {
     return this.clients.data.getMarketTrades(marketId, limit);
   }

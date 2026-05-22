@@ -94,6 +94,46 @@ test("wallet scoring flags low-sample wallets and scores active wallets higher",
   assert.equal(score.flags.includes("LOW_SAMPLE"), false);
 });
 
+test("wallet scoring uses market context for configured wallet resolved stats", () => {
+  const trades: WalletTrade[] = [
+    {
+      wallet: "0xconfigured",
+      marketId: "resolved-config",
+      outcome: "YES",
+      side: "BUY",
+      price: 0.5,
+      size: 10,
+      timestamp: Date.now()
+    },
+    {
+      wallet: "0xconfigured",
+      marketId: "sports-config",
+      outcome: "YES",
+      side: "BUY",
+      price: 0.5,
+      size: 10,
+      timestamp: Date.now() + 60_000
+    },
+    {
+      wallet: "0xconfigured",
+      marketId: "sports-config",
+      outcome: "YES",
+      side: "SELL",
+      price: 0.6,
+      size: 10,
+      timestamp: Date.now() + 120_000
+    }
+  ];
+  const score = scoreWallet({ address: "0xconfigured", enabled: true }, trades, Date.now(), [
+    { ...market, id: "resolved-config", resolved: true, winningOutcome: "YES" },
+    { ...market, id: "sports-config", question: "Will the NBA team win tonight?" }
+  ]);
+  assert.equal(score.resolvedMarkets, 1);
+  assert.equal(score.resolvedWins, 1);
+  assert.equal(score.dominantCategory, "sports");
+});
+
+
 test("wallet discovery ranks active repeat traders and filters tiny samples", () => {
   const trades: WalletTrade[] = [
     ...Array.from({ length: 8 }, (_, index) => ({

@@ -152,13 +152,25 @@ export function discoverWallets(
     .slice(0, config.maxDiscoveredWallets);
 }
 
-export function scoreWallet(wallet: TrackedWallet, trades: WalletTrade[], now = Date.now()): WalletScore {
+export function scoreWallet(wallet: TrackedWallet, trades: WalletTrade[], now = Date.now(), markets: MarketSnapshot[] = []): WalletScore {
   const dayAgo = now - 24 * 60 * 60 * 1000;
   const recentTradeCount = trades.filter((trade) => trade.timestamp >= dayAgo).length;
   const tradeCount = trades.length;
   const uniqueMarkets = new Set(trades.map((trade) => trade.marketId)).size;
-  const performance = analyzeWalletPerformance([...trades].sort((a, b) => a.timestamp - b.timestamp));
+  const sorted = [...trades].sort((a, b) => a.timestamp - b.timestamp);
+  const categoryProfiles = buildCategoryProfiles(sorted, buildCategoryIndex(markets));
+  const dominantProfile = categoryProfiles[0];
+  const resolvedStats = analyzeResolvedOutcomes(sorted, buildResolutionIndex(markets));
+  const performance = analyzeWalletPerformance(sorted);
   const sampleConfidence = sampleConfidenceFor(tradeCount, performance.closedTradeCount);
+  const recentTrades = sorted.filter((trade) => now - trade.timestamp <= 24 * 60 * 60 * 1000);
+  const recentVolume = recentTrades.reduce((sum, trade) => sum + trade.price * trade.size, 0);
+  const hotScore = scoreHotness(recentTrades.length, recentVolume, sorted[sorted.length - 1]?.timestamp ?? now, now);
+  const exitBehaviorScore = scoreExitBehavior(
+    trades.filter((trade) => trade.side === "SELL").length,
+    trades.filter((trade) => trade.side === "BUY").length,
+    performance.avgHoldMinutesApprox
+  );
   const flags: string[] = [];
   if (tradeCount < 5) flags.push("LOW_SAMPLE");
   if (performance.closedTradeCount < 3) flags.push("LOW_CLOSED_SAMPLE");
@@ -172,22 +184,22 @@ export function scoreWallet(wallet: TrackedWallet, trades: WalletTrade[], now = 
     uniqueMarkets,
     performance,
     sampleConfidence,
-    exitBehaviorScore: scoreExitBehavior(
-      trades.filter((trade) => trade.side === "SELL").length,
-      trades.filter((trade) => trade.side === "BUY").length,
-      performance.avgHoldMinutesApprox
-    )
+    exitBehaviorScore
   }), tradeCount, performance.closedTradeCount, trades.filter((trade) => trade.side === "SELL").length);
 
   return {
     wallet: wallet.address.toLowerCase(),
     label: wallet.label,
     score: Math.max(0, Math.min(100, Math.round(score))),
+    copyabilityScore: Math.round(clamp(score * 0.5 + (dominantProfile?.score ?? 0) * 0.25 + hotScore * 0.1 + exitBehaviorScore * 0.15, 0, 100)),
+    hotScore,
+    categoryConsistencyScore: dominantProfile?.score,
+    dominantCategory: dominantProfile?.category,
     sampleConfidence,
-    resolvedMarkets: 0,
-    resolvedWins: 0,
-    resolvedLosses: 0,
-    resolvedWinRate: 0,
+    resolvedMarkets: resolvedStats.resolvedMarkets,
+    resolvedWins: resolvedStats.resolvedWins,
+    resolvedLosses: resolvedStats.resolvedLosses,
+    resolvedWinRate: resolvedStats.resolvedWinRate,
     tradeCount,
     recentTradeCount,
     reliability: score >= 70 && sampleConfidence >= 0.65 ? "HIGH" : score >= 55 ? "MEDIUM" : "LOW",

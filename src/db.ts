@@ -408,6 +408,21 @@ export class BotDatabase {
     );
   }
 
+  getMarketsByIds(ids: string[]): MarketSnapshot[] {
+    const unique = [...new Set(ids.filter(Boolean))];
+    if (unique.length === 0) return [];
+    const rows: DbMarket[] = [];
+    for (let index = 0; index < unique.length; index += 400) {
+      const chunk = unique.slice(index, index + 400);
+      const placeholders = chunk.map(() => "?").join(", ");
+      rows.push(...this.db.prepare(`
+        SELECT * FROM markets
+        WHERE id IN (${placeholders}) OR condition_id IN (${placeholders})
+      `).all(...chunk, ...chunk) as unknown as DbMarket[]);
+    }
+    return rows.map(rowToMarket);
+  }
+
   saveOrderBook(book: OrderBookSnapshot): void {
     this.db.prepare(`
       INSERT INTO orderbook_snapshots
@@ -666,6 +681,23 @@ interface DbPosition {
   status: "OPEN" | "CLOSED";
 }
 
+interface DbMarket {
+  id: string;
+  condition_id: string | null;
+  question: string;
+  active: number;
+  closed: number;
+  archived: number;
+  accepting_orders: number;
+  resolved: number;
+  winning_outcome: string | null;
+  liquidity: number;
+  volume_24h: number;
+  outcomes_json: string;
+  clob_token_ids_json: string;
+  raw_json: string | null;
+}
+
 interface DbDiscoveredWallet {
   address: string;
   score: number;
@@ -735,6 +767,29 @@ function rowToPosition(row: DbPosition): Position {
     openedAt: row.opened_at,
     updatedAt: row.updated_at,
     status: row.status
+  };
+}
+
+function rowToMarket(row: DbMarket): MarketSnapshot {
+  const raw = row.raw_json ? JSON.parse(row.raw_json) as unknown : undefined;
+  const rawRecord = raw && typeof raw === "object" && !Array.isArray(raw) ? raw as Record<string, unknown> : {};
+  return {
+    id: row.id,
+    conditionId: row.condition_id ?? undefined,
+    question: row.question,
+    slug: typeof rawRecord.slug === "string" ? rawRecord.slug : undefined,
+    active: Boolean(row.active),
+    closed: Boolean(row.closed),
+    archived: Boolean(row.archived),
+    acceptingOrders: Boolean(row.accepting_orders),
+    resolved: Boolean(row.resolved),
+    winningOutcome: row.winning_outcome ?? undefined,
+    liquidity: row.liquidity,
+    volume24h: row.volume_24h,
+    outcomes: JSON.parse(row.outcomes_json) as string[],
+    clobTokenIds: JSON.parse(row.clob_token_ids_json) as string[],
+    outcomePrices: Array.isArray(rawRecord.outcomePrices) ? rawRecord.outcomePrices.map(Number).filter(Number.isFinite) : [],
+    raw
   };
 }
 

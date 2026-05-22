@@ -129,6 +129,8 @@ This is not perfect historical accounting yet. It does not fully account for unr
 
 StratiFi stores normalized wallet trades in SQLite. Fresh API trades are deduped and merged with previous observations before scoring, so source profiles can improve across scans.
 
+For configured and discovered source wallets, the Signal Agent also backfills market snapshots for market IDs found in trade history. Cached snapshots are reused first; missing markets are fetched from Gamma and saved locally. This gives scoring better category and resolution context over time.
+
 When market resolution data is available, StratiFi also tracks:
 
 - Resolved markets

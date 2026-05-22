@@ -102,6 +102,8 @@ Market snapshots also carry optional resolution fields:
 
 When resolution data is available, wallet scoring records resolved wins, resolved losses, resolved markets, and resolved win rate. Public-facing views should show only aggregate source strength and resolved-performance summaries, not the wallet address.
 
+The Signal Agent also backfills market snapshots for market IDs found in stored source history. It uses cached snapshots first, then asks Gamma for missing markets. This gives configured-wallet scoring category and resolution context beyond the active market scan.
+
 This gives us the foundation for the transparency dashboard, Telegram summaries, audit review, and future backtesting comparisons.
 
 ## Next Build Phases

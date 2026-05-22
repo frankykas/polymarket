@@ -15,6 +15,28 @@ export class GammaClient {
     const raw = await getJson<unknown[]>(url);
     return raw.map(normalizeMarket).filter((market) => market.clobTokenIds.length > 0);
   }
+
+  async getMarketById(marketId: string): Promise<MarketSnapshot | undefined> {
+    const candidates = [
+      `/markets/${encodeURIComponent(marketId)}`,
+      `/markets?id=${encodeURIComponent(marketId)}`,
+      `/markets?condition_ids=${encodeURIComponent(marketId)}`,
+      `/markets?conditionIds=${encodeURIComponent(marketId)}`,
+      `/markets?conditionId=${encodeURIComponent(marketId)}`
+    ];
+
+    for (const path of candidates) {
+      try {
+        const raw = await getJson<unknown>(new URL(path, this.baseUrl));
+        const markets = Array.isArray(raw) ? raw.map(normalizeMarket) : [normalizeMarket(raw)];
+        const exact = markets.find((market) => market.id === marketId || market.conditionId === marketId);
+        return exact ?? markets[0];
+      } catch {
+        continue;
+      }
+    }
+    return undefined;
+  }
 }
 
 export class DataClient {
