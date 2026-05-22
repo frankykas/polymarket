@@ -7,6 +7,7 @@ import {
 } from "../engines.js";
 import type { AgentEventWriter } from "../events/eventWriter.js";
 import type { PolymarketProvider } from "../providers/polymarketProvider.js";
+import { runShadowBacktest, summarizeShadowBacktest } from "../shadowBacktest.js";
 import type {
   BotConfig,
   MarketSnapshot,
@@ -100,6 +101,7 @@ export class SignalAgent {
       scoreWallet(wallet, walletTrades.get(wallet.address.toLowerCase()) ?? [], Date.now(), historyMarkets)
     );
     const scores = mergeScores(configuredScores, discoveredScores);
+    this.runShadowBacktests(scores, walletTrades, historyMarkets, discoveryTrades);
     for (const score of scores) {
       this.db.saveWalletScore(score);
       this.events.write({
@@ -237,6 +239,46 @@ export class SignalAgent {
     }
 
     return [...new Map([...seedMarkets, ...cached, ...fetched].map((market) => [market.id, market])).values()];
+  }
+
+  private runShadowBacktests(
+    scores: WalletScore[],
+    walletTrades: Map<string, WalletTrade[]>,
+    markets: MarketSnapshot[],
+    discoveryTrades: WalletTrade[]
+  ): void {
+    if (!this.config.shadowBacktestEnabled) return;
+    const allObservedTrades = [...walletTrades.values()].flat().concat(discoveryTrades);
+    const allShadowTrades = scores.flatMap((score) => {
+      const trades = walletTrades.get(score.wallet.toLowerCase()) ?? [];
+      if (trades.length === 0 || score.score < this.config.minWalletScore) return [];
+      return runShadowBacktest(
+        score.wallet,
+        trades.slice(-this.config.shadowHistoryLimit),
+        markets,
+        this.config,
+        Date.now(),
+        allObservedTrades
+      );
+    });
+    if (allShadowTrades.length === 0) return;
+    const saved = this.db.saveShadowTrades(allShadowTrades);
+    const report = summarizeShadowBacktest(allShadowTrades);
+    this.events.write({
+      type: "shadow.backtest_completed",
+      agent: "Signal Agent",
+      visibility: "PUBLIC",
+      message: "Shadow-copy backtest updated.",
+      payload: {
+        shadowTrades: allShadowTrades.length,
+        savedTrades: saved,
+        simulated: report.simulated,
+        skipped: report.skipped,
+        pnl: report.pnl,
+        winRate: report.winRate,
+        avgReturnPct: report.avgReturnPct
+      }
+    });
   }
 }
 

@@ -30,5 +30,10 @@
   "minDiscoveryTrades": 5,
   "minDiscoveryVolume": 50,
   "maxDiscoveredWallets": 25,
-  "autoTrackDiscoveredWallets": true
+  "autoTrackDiscoveredWallets": true,
+  "shadowBacktestEnabled": true,
+  "shadowCopyDelayMs": 30000,
+  "shadowMaxEntryPriceMovePct": 0.05,
+  "shadowPositionSize": 5,
+  "shadowHistoryLimit": 500
 }

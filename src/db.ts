@@ -12,6 +12,8 @@ import type {
   PerformanceReport,
   Position,
   RiskDecision,
+  ShadowBacktestReport,
+  ShadowTrade,
   TradeSignal,
   TrackedWallet,
   WalletScore,
@@ -227,6 +229,27 @@ export class BotDatabase {
         flags_json TEXT NOT NULL,
         created_at INTEGER NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS shadow_trades (
+        id TEXT PRIMARY KEY,
+        wallet TEXT NOT NULL,
+        market_id TEXT NOT NULL,
+        token_id TEXT,
+        outcome TEXT NOT NULL,
+        source_timestamp INTEGER NOT NULL,
+        detected_at INTEGER NOT NULL,
+        source_price REAL NOT NULL,
+        simulated_entry_price REAL,
+        simulated_exit_price REAL,
+        size_usd REAL NOT NULL,
+        pnl REAL NOT NULL,
+        return_pct REAL NOT NULL,
+        status TEXT NOT NULL,
+        exit_reason TEXT,
+        rejection_reason TEXT,
+        created_at INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_shadow_trades_wallet ON shadow_trades (wallet);
+      CREATE INDEX IF NOT EXISTS idx_shadow_trades_status ON shadow_trades (status);
     `);
     this.ensureDiscoveredWalletColumns();
     this.ensureWalletScoreColumns();
@@ -572,6 +595,11 @@ export class BotDatabase {
     return Number(row.count ?? 0);
   }
 
+  private scalarCount(table: string, where: string): number {
+    const row = this.db.prepare(`SELECT COUNT(*) as count FROM ${table} WHERE ${where}`).get() as { count: number };
+    return Number(row.count ?? 0);
+  }
+
   log(level: "INFO" | "WARN" | "ERROR", message: string, payload?: unknown): void {
     this.db.prepare(`
       INSERT INTO bot_run_logs (level, message, payload_json, created_at)
@@ -638,6 +666,66 @@ export class BotDatabase {
       LIMIT ?
     `).all(wallet.toLowerCase(), limit) as unknown as DbWalletTrade[];
     return rows.map(rowToWalletTrade).sort((a, b) => a.timestamp - b.timestamp);
+  }
+
+  saveShadowTrades(trades: ShadowTrade[]): number {
+    const stmt = this.db.prepare(`
+      INSERT OR REPLACE INTO shadow_trades
+      (id, wallet, market_id, token_id, outcome, source_timestamp, detected_at, source_price, simulated_entry_price,
+       simulated_exit_price, size_usd, pnl, return_pct, status, exit_reason, rejection_reason, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    let saved = 0;
+    for (const trade of trades) {
+      const result = stmt.run(
+        trade.id,
+        trade.wallet,
+        trade.marketId,
+        trade.tokenId ?? null,
+        trade.outcome,
+        trade.sourceTimestamp,
+        trade.detectedAt,
+        trade.sourcePrice,
+        trade.simulatedEntryPrice ?? null,
+        trade.simulatedExitPrice ?? null,
+        trade.sizeUsd,
+        trade.pnl,
+        trade.returnPct,
+        trade.status,
+        trade.exitReason ?? null,
+        trade.rejectionReason ?? null,
+        trade.createdAt
+      );
+      saved += Number(result.changes ?? 0);
+    }
+    return saved;
+  }
+
+  getShadowBacktestReport(): ShadowBacktestReport {
+    const total = this.count("shadow_trades");
+    const simulated = this.scalarCount("shadow_trades", "status = 'SIMULATED'");
+    const skipped = this.scalarCount("shadow_trades", "status = 'SKIPPED'");
+    const row = this.db.prepare(`
+      SELECT
+        COALESCE(SUM(pnl), 0) as pnl,
+        COALESCE(AVG(return_pct), 0) as avg_return_pct,
+        SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END) as wins,
+        SUM(CASE WHEN pnl < 0 THEN 1 ELSE 0 END) as losses
+      FROM shadow_trades
+      WHERE status = 'SIMULATED'
+    `).get() as { pnl: number; avg_return_pct: number; wins: number; losses: number };
+    const wins = Number(row.wins ?? 0);
+    const losses = Number(row.losses ?? 0);
+    return {
+      total,
+      simulated,
+      skipped,
+      pnl: Number(row.pnl ?? 0),
+      wins,
+      losses,
+      winRate: wins + losses > 0 ? wins / (wins + losses) : 0,
+      avgReturnPct: Number(row.avg_return_pct ?? 0)
+    };
   }
 
   private saveSourceScoreSnapshot(score: WalletScore): void {

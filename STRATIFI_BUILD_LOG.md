@@ -4,6 +4,21 @@ This file tracks the major features added while building StratiFi from the origi
 
 ## Recent Milestones
 
+### Shadow Copy Backtesting
+
+- Added `shadow_trades` persistence.
+- Added `npm run shadow`.
+- Added Telegram `/shadow`.
+- Added shadow-copy simulation for source-wallet buys after a configurable detection delay.
+- Added copy-entry penalty through `shadowCopyDelayMs` and `shadowMaxEntryPriceMovePct`.
+- Added simulated exits/marks from:
+  - source sell after detection
+  - resolved market outcome
+  - latest observed market tape
+  - source-price fallback
+- Added aggregate shadow PnL, win rate, average return, simulated count, and skipped count.
+- Added tests for source exits, resolved exits, latest marks, broad market tape marks, fallback marks, and DB reporting.
+
 ### Source History And Market Backfill
 
 - Added durable wallet trade history in SQLite.
@@ -74,18 +89,18 @@ The current scanner can:
 - score wallets with category and sample-confidence controls
 - create wallet-alignment signals
 - run risk checks through strategy profiles
+- run shadow-copy backtests against source history
 - simulate paper orders and exits
 - report PnL and wallet intelligence through CLI and Telegram
 
 ## Next Planned Work
 
-The next major feature should be shadow-copy backtesting:
+The next major feature should feed shadow-copy results back into wallet scoring:
 
-- simulate copying wallet buys after detection delay
-- account for spread, depth, and price movement
-- compare raw wallet quality against realistic StratiFi copy performance
-- store shadow trades separately from paper/live trades
-- use shadow results to demote wallets that look good but cannot be copied well
+- demote sources with poor shadow-copy PnL
+- separate realized shadow exits from marked/unrealized shadow results
+- track shadow performance by category
+- expose public-safe shadow performance in the dashboard
 
 After that, the next likely phase is splitting Telegram into:
 

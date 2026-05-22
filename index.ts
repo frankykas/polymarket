@@ -15,7 +15,7 @@ import { PolymarketProvider } from "./src/providers/polymarketProvider.js";
 import { TelegramAlerts } from "./src/telegram.js";
 import type { MarketSnapshot, OrderBookSnapshot, PaperOrder, WalletScore } from "./src/types.js";
 
-type Mode = "dev" | "scan" | "performance";
+type Mode = "dev" | "scan" | "performance" | "shadow";
 
 interface CycleResult {
   markets: MarketSnapshot[];
@@ -80,6 +80,13 @@ class PolymarketPaperBot {
       return;
     }
 
+    if (mode === "shadow") {
+      await this.runCycle({ placePaperOrders: false });
+      console.log(this.plainShadowReport());
+      this.db.close();
+      return;
+    }
+
     console.log("Starting Polymarket paper bot. No live trading code path is enabled.");
     this.telegram.startCommandLoop({
       status: () => this.telegramStatus(),
@@ -88,6 +95,7 @@ class PolymarketPaperBot {
       wallets: () => this.telegramWallets(),
       topWallets: () => this.telegramTopWallets(),
       performance: () => this.telegramPerformance(),
+      shadow: () => this.telegramShadow(),
       pause: () => this.telegramPause(),
       resume: () => this.telegramResume()
     });
@@ -212,6 +220,9 @@ class PolymarketPaperBot {
     console.log(`Signals: ${result.signals}`);
     console.log(`Approved: ${result.approved}`);
     console.log(`Rejected: ${result.rejected}`);
+    const shadow = this.db.getShadowBacktestReport();
+    console.log(`Shadow simulated: ${shadow.simulated}`);
+    console.log(`Shadow PnL: $${shadow.pnl.toFixed(2)}`);
     if (result.scores.length === 0) {
       console.log("No enabled wallets. Add addresses to config/wallets.json to generate wallet-following signals.");
     } else {
@@ -345,6 +356,21 @@ class PolymarketPaperBot {
     ].join("\n");
   }
 
+  private telegramShadow(): string {
+    const report = this.db.getShadowBacktestReport();
+    return [
+      "ðŸ§ª <b>Shadow Copy Backtest</b>",
+      "",
+      `Total candidates: <b>${report.total}</b>`,
+      `Simulated: <b>${report.simulated}</b>`,
+      `Skipped: <b>${report.skipped}</b>`,
+      `PnL: <b>$${report.pnl.toFixed(2)}</b>`,
+      `Average return: <b>${(report.avgReturnPct * 100).toFixed(1)}%</b>`,
+      `Win rate: <b>${(report.winRate * 100).toFixed(0)}%</b>`,
+      `Wins/Losses: <b>${report.wins}/${report.losses}</b>`
+    ].join("\n");
+  }
+
   private plainPerformanceReport(): string {
     const report = this.db.getPerformanceReport();
     return [
@@ -360,6 +386,21 @@ class PolymarketPaperBot {
       `Signals: ${report.signals}`,
       `Paper orders: ${report.paperOrders}`,
       `Paper fills: ${report.paperFills}`
+    ].join("\n");
+  }
+
+  private plainShadowReport(): string {
+    const report = this.db.getShadowBacktestReport();
+    return [
+      "StratiFi Shadow Copy Backtest",
+      "",
+      `Total candidates: ${report.total}`,
+      `Simulated: ${report.simulated}`,
+      `Skipped: ${report.skipped}`,
+      `PnL: $${report.pnl.toFixed(2)}`,
+      `Average return: ${(report.avgReturnPct * 100).toFixed(1)}%`,
+      `Win rate: ${(report.winRate * 100).toFixed(0)}%`,
+      `Wins/Losses: ${report.wins}/${report.losses}`
     ].join("\n");
   }
 
@@ -388,6 +429,6 @@ class PolymarketPaperBot {
 }
 
 const arg = process.argv[2];
-const mode = (arg === "dev" || arg === "performance" ? arg : "scan") satisfies Mode;
+const mode = (arg === "dev" || arg === "performance" || arg === "shadow" ? arg : "scan") satisfies Mode;
 const bot = new PolymarketPaperBot();
 await bot.start(mode);

@@ -121,6 +121,7 @@ export class TelegramAlerts {
     if (normalized === "wallets") return this.sendTo(chatId, await handlers.wallets(), mainKeyboard());
     if (normalized === "topwallets") return this.sendTo(chatId, await handlers.topWallets(), mainKeyboard());
     if (normalized === "performance") return this.sendTo(chatId, await handlers.performance(), mainKeyboard());
+    if (normalized === "shadow") return this.sendTo(chatId, await handlers.shadow(), mainKeyboard());
     if (normalized === "pause") return this.sendTo(chatId, await handlers.pause(), mainKeyboard());
     if (normalized === "resume") return this.sendTo(chatId, await handlers.resume(), mainKeyboard());
     await this.sendTo(chatId, menuText(), mainKeyboard());
@@ -181,6 +182,7 @@ export interface TelegramHandlers {
   wallets: () => string | Promise<string>;
   topWallets: () => string | Promise<string>;
   performance: () => string | Promise<string>;
+  shadow: () => string | Promise<string>;
   pause: () => string | Promise<string>;
   resume: () => string | Promise<string>;
 }
@@ -240,6 +242,7 @@ function menuText(): string {
     "/discover - find profitable wallet candidates",
     "/topwallets - ranked wallet intelligence",
     "/performance - paper PnL report",
+    "/shadow - shadow-copy backtest",
     "/risk - current limits",
     "/wallets - tracked wallets",
     "/pause - pause cycles",

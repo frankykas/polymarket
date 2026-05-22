@@ -14,6 +14,7 @@ import {
 import { AgentEventWriter } from "../src/events/eventWriter.js";
 import { buildStrategyProfiles } from "../src/profiles/profiles.js";
 import { publicWalletPreviews } from "../src/public/readModels.js";
+import { runShadowBacktest, summarizeShadowBacktest } from "../src/shadowBacktest.js";
 import type { BotConfig, MarketSnapshot, OrderBookSnapshot, TradeSignal, WalletTrade } from "../src/types.js";
 
 const config: BotConfig = {
@@ -48,7 +49,12 @@ const config: BotConfig = {
   minDiscoveryTrades: 5,
   minDiscoveryVolume: 50,
   maxDiscoveredWallets: 25,
-  autoTrackDiscoveredWallets: true
+  autoTrackDiscoveredWallets: true,
+  shadowBacktestEnabled: true,
+  shadowCopyDelayMs: 30000,
+  shadowMaxEntryPriceMovePct: 0.05,
+  shadowPositionSize: 5,
+  shadowHistoryLimit: 500
 };
 
 const market: MarketSnapshot = {
@@ -428,6 +434,156 @@ test("database persists wallet trade history with dedupe", () => {
   const history = db.getWalletTradeHistory("0xhistory", 10);
   assert.equal(history.length, 1);
   assert.equal(history[0].wallet, "0xhistory");
+  db.close();
+});
+
+test("shadow backtest simulates delayed copy exits from source sell", () => {
+  const trades: WalletTrade[] = [
+    {
+      wallet: "0xshadow",
+      marketId: "m1",
+      tokenId: "yes-token",
+      outcome: "YES",
+      side: "BUY",
+      price: 0.5,
+      size: 20,
+      timestamp: 1000
+    },
+    {
+      wallet: "0xshadow",
+      marketId: "m1",
+      tokenId: "yes-token",
+      outcome: "YES",
+      side: "SELL",
+      price: 0.65,
+      size: 20,
+      timestamp: 1000 + config.shadowCopyDelayMs + 1000
+    }
+  ];
+  const shadow = runShadowBacktest("0xshadow", trades, [market], config, 5000);
+  assert.equal(shadow.length, 1);
+  assert.equal(shadow[0].status, "SIMULATED");
+  assert.ok(shadow[0].pnl > 0);
+  assert.equal(shadow[0].exitReason, "source sell after detection");
+});
+
+test("shadow backtest can exit from resolved market outcome", () => {
+  const trades: WalletTrade[] = [{
+    wallet: "0xshadow",
+    marketId: "m1",
+    tokenId: "yes-token",
+    outcome: "YES",
+    side: "BUY",
+    price: 0.5,
+    size: 20,
+    timestamp: 1000
+  }];
+  const shadow = runShadowBacktest("0xshadow", trades, [{ ...market, resolved: true, winningOutcome: "YES" }], config, 5000);
+  assert.equal(shadow[0].status, "SIMULATED");
+  assert.equal(shadow[0].simulatedExitPrice, 1);
+  assert.ok(summarizeShadowBacktest(shadow).pnl > 0);
+});
+
+test("shadow backtest marks to latest observed price when no exit exists", () => {
+  const trades: WalletTrade[] = [
+    {
+      wallet: "0xshadow",
+      marketId: "m1",
+      tokenId: "yes-token",
+      outcome: "YES",
+      side: "BUY",
+      price: 0.5,
+      size: 20,
+      timestamp: 1000
+    },
+    {
+      wallet: "0xshadow",
+      marketId: "m1",
+      tokenId: "yes-token",
+      outcome: "YES",
+      side: "BUY",
+      price: 0.58,
+      size: 5,
+      timestamp: 1000 + config.shadowCopyDelayMs + 1000
+    }
+  ];
+  const shadow = runShadowBacktest("0xshadow", trades, [market], config, 5000);
+  assert.equal(shadow[0].status, "SIMULATED");
+  assert.equal(shadow[0].exitReason, "latest observed mark");
+  assert.ok(shadow[0].pnl > 0);
+});
+
+test("shadow backtest can mark from broader market tape", () => {
+  const sourceTrades: WalletTrade[] = [{
+    wallet: "0xshadow",
+    marketId: "m1",
+    tokenId: "yes-token",
+    outcome: "YES",
+    side: "BUY",
+    price: 0.5,
+    size: 20,
+    timestamp: 1000
+  }];
+  const marketTape: WalletTrade[] = [
+    ...sourceTrades,
+    {
+      wallet: "0xother",
+      marketId: "m1",
+      tokenId: "yes-token",
+      outcome: "YES",
+      side: "BUY",
+      price: 0.62,
+      size: 5,
+      timestamp: 1000 + config.shadowCopyDelayMs + 1000
+    }
+  ];
+  const shadow = runShadowBacktest("0xshadow", sourceTrades, [market], config, 5000, marketTape);
+  assert.equal(shadow[0].status, "SIMULATED");
+  assert.equal(shadow[0].simulatedExitPrice, 0.62);
+});
+
+test("shadow backtest falls back to source price when no later mark exists", () => {
+  const shadow = runShadowBacktest("0xshadow", [{
+    wallet: "0xshadow",
+    marketId: "m1",
+    outcome: "YES",
+    side: "BUY",
+    price: 0.5,
+    size: 20,
+    timestamp: 1000
+  }], [market], config, 5000);
+  assert.equal(shadow[0].status, "SIMULATED");
+  assert.equal(shadow[0].exitReason, "source price fallback");
+  assert.ok(shadow[0].pnl < 0);
+});
+
+
+
+
+test("database stores shadow trades and reports aggregate performance", () => {
+  const path = "data/test-shadow.sqlite";
+  for (const suffix of ["", "-wal", "-shm"]) {
+    try {
+      unlinkSync(`${path}${suffix}`);
+    } catch {
+      // test cleanup is best effort
+    }
+  }
+  const db = new BotDatabase(path);
+  const shadow = runShadowBacktest("0xshadow", [{
+    wallet: "0xshadow",
+    marketId: "m1",
+    outcome: "YES",
+    side: "BUY",
+    price: 0.5,
+    size: 20,
+    timestamp: 1000
+  }], [{ ...market, resolved: true, winningOutcome: "YES" }], config, 5000);
+  assert.equal(db.saveShadowTrades(shadow), 1);
+  const report = db.getShadowBacktestReport();
+  assert.equal(report.total, 1);
+  assert.equal(report.simulated, 1);
+  assert.ok(report.pnl > 0);
   db.close();
 });
 

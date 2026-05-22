@@ -104,6 +104,25 @@ When resolution data is available, wallet scoring records resolved wins, resolve
 
 The Signal Agent also backfills market snapshots for market IDs found in stored source history. It uses cached snapshots first, then asks Gamma for missing markets. This gives configured-wallet scoring category and resolution context beyond the active market scan.
 
+## Shadow Copy Backtesting
+
+Shadow-copy backtesting is separate from paper trading. It does not open paper positions and it never places live orders.
+
+The Signal Agent simulates whether StratiFi could have copied source-wallet buys after a configured detection delay. Results are stored in `shadow_trades` and summarized through `npm run shadow` and Telegram `/shadow`.
+
+Shadow entry:
+- starts from the source buy price
+- adds a delay/copy penalty
+- uses `shadowPositionSize` as the simulated stake
+
+Shadow exit/mark priority:
+- later source sell after detection
+- resolved market outcome when known
+- latest observed market-tape price after detection
+- source-price fallback when no later mark exists
+
+The goal is to compare raw wallet quality against realistic copy performance. A wallet that looks profitable but performs poorly in shadow-copy should eventually be demoted by the scoring engine.
+
 This gives us the foundation for the transparency dashboard, Telegram summaries, audit review, and future backtesting comparisons.
 
 ## Next Build Phases
@@ -111,6 +130,6 @@ This gives us the foundation for the transparency dashboard, Telegram summaries,
 1. Pull deeper paginated source history for top candidates.
 2. Add resolved-market lookup/backfill for older markets not present in active scans.
 3. Split Telegram into private admin commands and public alert-only mode.
-4. Add shadow trades for rejected-but-interesting signals.
+4. Feed shadow-copy performance back into wallet scoring.
 5. Build the dashboard against public read models and event feeds.
 6. Add live-trading interfaces only after paper trading has enough forward performance data.

@@ -243,6 +243,37 @@ export interface PerformanceReport {
   approvedSignals: number;
 }
 
+export interface ShadowTrade {
+  id: string;
+  wallet: string;
+  marketId: string;
+  tokenId?: string;
+  outcome: OutcomeSide;
+  sourceTimestamp: number;
+  detectedAt: number;
+  sourcePrice: number;
+  simulatedEntryPrice?: number;
+  simulatedExitPrice?: number;
+  sizeUsd: number;
+  pnl: number;
+  returnPct: number;
+  status: "SIMULATED" | "SKIPPED";
+  exitReason?: string;
+  rejectionReason?: string;
+  createdAt: number;
+}
+
+export interface ShadowBacktestReport {
+  total: number;
+  simulated: number;
+  skipped: number;
+  pnl: number;
+  wins: number;
+  losses: number;
+  winRate: number;
+  avgReturnPct: number;
+}
+
 export interface BotConfig {
   paperMode: true;
   bankroll: number;
@@ -276,6 +307,11 @@ export interface BotConfig {
   minDiscoveryVolume: number;
   maxDiscoveredWallets: number;
   autoTrackDiscoveredWallets: boolean;
+  shadowBacktestEnabled: boolean;
+  shadowCopyDelayMs: number;
+  shadowMaxEntryPriceMovePct: number;
+  shadowPositionSize: number;
+  shadowHistoryLimit: number;
 }
 
 export interface RuntimeEnv {

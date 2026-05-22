@@ -140,6 +140,21 @@ When market resolution data is available, StratiFi also tracks:
 
 This is separate from approximate buy/sell PnL. A wallet can sell profitably before resolution, hold a winning outcome to resolution, or look good in raw PnL while still being hard to copy. StratiFi keeps those concepts separate so later backtests can compare raw wallet quality against realistic copy performance.
 
+## Shadow Copy Performance
+
+StratiFi stores shadow-copy simulations separately from paper trades.
+
+Shadow-copy asks: if StratiFi saw a source wallet buy, waited for the configured detection delay, and entered with a conservative copy penalty, what would have happened?
+
+Shadow exits are selected in this order:
+
+- Later source sell after detection
+- Resolved market outcome
+- Latest observed market-tape price after detection
+- Source-price fallback
+
+This is not yet part of the wallet score, but it is the next intended scoring input. A wallet with strong raw PnL but poor shadow-copy results should be demoted because StratiFi cannot realistically follow it.
+
 ## Known Limitations
 
 Current scoring is useful for discovery, but it is not final-grade wallet intelligence yet.
@@ -150,6 +165,7 @@ Main limitations:
 - Unrealized PnL is not fully reconciled.
 - Market resolution outcomes are only used when the provider payload includes resolution data.
 - Copy delay and order-book slippage are only handled in the paper execution layer, not in historical wallet ranking.
+- Shadow-copy results are tracked but not yet fed back into the score.
 - Wallets can look good during one market regime and degrade later.
 
 ## Next Improvements
