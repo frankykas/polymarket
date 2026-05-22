@@ -20,6 +20,25 @@ export class GammaClient {
 export class DataClient {
   constructor(private baseUrl: string) {}
 
+  async getMarketTrades(marketId: string, limit: number): Promise<WalletTrade[]> {
+    const candidates = [
+      `/trades?market=${marketId}&limit=${limit}`,
+      `/trades?markets=${marketId}&limit=${limit}`,
+      `/activity?market=${marketId}&type=TRADE&limit=${limit}`
+    ];
+
+    for (const path of candidates) {
+      try {
+        const data = await getJson<unknown[]>(new URL(path, this.baseUrl));
+        const trades = data.map((item) => normalizeWalletTrade(undefined, item)).filter((trade): trade is WalletTrade => Boolean(trade));
+        if (trades.length > 0) return trades;
+      } catch {
+        continue;
+      }
+    }
+    return [];
+  }
+
   async getWalletTrades(wallet: string, limit: number): Promise<WalletTrade[]> {
     const candidates = [
       `/trades?user=${wallet}&limit=${limit}`,
@@ -185,7 +204,7 @@ function normalizeMarket(raw: unknown): MarketSnapshot {
   };
 }
 
-function normalizeWalletTrade(wallet: string, raw: unknown): WalletTrade | undefined {
+function normalizeWalletTrade(wallet: string | undefined, raw: unknown): WalletTrade | undefined {
   const item = raw as Record<string, unknown>;
   const marketId = String(item.market ?? item.marketId ?? item.conditionId ?? item.condition_id ?? "");
   const tokenId = stringOrUndefined(item.asset ?? item.assetId ?? item.tokenId ?? item.token_id);
@@ -194,9 +213,10 @@ function normalizeWalletTrade(wallet: string, raw: unknown): WalletTrade | undef
   const price = numberFrom(item.price ?? item.avgPrice ?? item.lastPrice);
   const size = numberFrom(item.size ?? item.amount ?? item.shares);
   const timestamp = timestampFrom(item.timestamp ?? item.createdAt ?? item.time);
-  if (!marketId || price <= 0 || size <= 0) return undefined;
+  const trader = String(wallet ?? item.proxyWallet ?? item.proxy_wallet ?? item.user ?? item.address ?? item.trader ?? "");
+  if (!marketId || !trader || price <= 0 || size <= 0) return undefined;
   return {
-    wallet: wallet.toLowerCase(),
+    wallet: trader.toLowerCase(),
     marketId,
     conditionId: stringOrUndefined(item.conditionId ?? item.condition_id),
     tokenId,

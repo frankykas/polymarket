@@ -22,5 +22,12 @@
   "scanIntervalMs": 60000,
   "walletActivityLimit": 100,
   "marketScanLimit": 150,
-  "maxWatchedMarkets": 40
+  "maxWatchedMarkets": 40,
+  "discoveryEnabled": true,
+  "discoveryMarketLimit": 40,
+  "discoveryTradesPerMarket": 100,
+  "minDiscoveryTrades": 5,
+  "minDiscoveryVolume": 50,
+  "maxDiscoveredWallets": 25,
+  "autoTrackDiscoveredWallets": true
 }

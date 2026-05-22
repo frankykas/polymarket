@@ -5,8 +5,10 @@ import {
   PaperExecutionEngine,
   decideExit,
   decideRisk,
+  discoverWallets,
   evaluateMarketQuality,
   generateSignals,
+  scoreDiscoveredWallet,
   scoreWallet,
   type RiskState
 } from "./src/engines.js";
@@ -18,6 +20,7 @@ type Mode = "dev" | "scan";
 interface CycleResult {
   markets: MarketSnapshot[];
   scores: WalletScore[];
+  discovered: number;
   signals: number;
   approved: number;
   rejected: number;
@@ -82,21 +85,41 @@ class PolymarketPaperBot {
   }
 
   private async runCycle(options: { placePaperOrders: boolean }): Promise<CycleResult> {
-    const result: CycleResult = { markets: [], scores: [], signals: 0, approved: 0, rejected: 0 };
+    const result: CycleResult = { markets: [], scores: [], discovered: 0, signals: 0, approved: 0, rejected: 0 };
     try {
       this.db.log("INFO", "cycle started", { placePaperOrders: options.placePaperOrders });
-      const walletTrades = await this.fetchWalletTrades();
-      const scores = this.wallets.map((wallet) => scoreWallet(wallet, walletTrades.get(wallet.address) ?? []));
-      for (const score of scores) this.db.saveWalletScore(score);
-      result.scores = scores;
-
       const markets = await this.clients.gamma.getMarkets(this.config.marketScanLimit);
       const watchedMarkets = markets.slice(0, this.config.maxWatchedMarkets);
       result.markets = watchedMarkets;
       for (const market of watchedMarkets) this.db.saveMarket(market);
       if (options.placePaperOrders) this.ws.connect(watchedMarkets.flatMap((market) => market.clobTokenIds));
 
+      const discoveryTrades = this.config.discoveryEnabled ? await this.fetchDiscoveryTrades(watchedMarkets) : [];
+      const discovered = this.config.discoveryEnabled ? discoverWallets(discoveryTrades, this.config) : [];
+      for (const wallet of discovered) this.db.saveDiscoveredWallet(wallet);
+      result.discovered = discovered.length;
+
+      const discoveredScores = this.config.autoTrackDiscoveredWallets
+        ? discovered.map((wallet) => scoreDiscoveredWallet(wallet)).filter((score) => score.score >= this.config.minWalletScore)
+        : [];
+      const trackedWallets = [...this.wallets];
+      for (const wallet of discoveredScores) {
+        if (!trackedWallets.some((tracked) => tracked.address === wallet.wallet)) {
+          trackedWallets.push({ address: wallet.wallet, label: "discovered", enabled: true });
+        }
+      }
+      this.db.syncWallets(trackedWallets);
+
+      const walletTrades = await this.fetchWalletTrades(trackedWallets);
+      const configuredScores = this.wallets.map((wallet) => scoreWallet(wallet, walletTrades.get(wallet.address) ?? []));
+      const scores = mergeScores(configuredScores, discoveredScores);
+      for (const score of scores) this.db.saveWalletScore(score);
+      result.scores = scores;
+
       const allTrades = [...walletTrades.values()].flat();
+      for (const trade of discoveryTrades) {
+        if (scores.some((score) => score.wallet === trade.wallet)) allTrades.push(trade);
+      }
       for (const market of watchedMarkets) {
         const books = await this.getBooksForMarket(market);
         const quality = evaluateMarketQuality(market, books, this.config);
@@ -137,11 +160,21 @@ class PolymarketPaperBot {
     }
   }
 
-  private async fetchWalletTrades(): Promise<Map<string, WalletTrade[]>> {
+  private async fetchWalletTrades(wallets = this.wallets): Promise<Map<string, WalletTrade[]>> {
     const trades = new Map<string, WalletTrade[]>();
-    for (const wallet of this.wallets) {
+    for (const wallet of wallets) {
       const walletTrades = await this.clients.data.getWalletTrades(wallet.address, this.config.walletActivityLimit);
       trades.set(wallet.address, walletTrades);
+    }
+    return trades;
+  }
+
+  private async fetchDiscoveryTrades(markets: MarketSnapshot[]): Promise<WalletTrade[]> {
+    const trades: WalletTrade[] = [];
+    const discoveryMarkets = markets.slice(0, this.config.discoveryMarketLimit);
+    for (const market of discoveryMarkets) {
+      const marketTrades = await this.clients.data.getMarketTrades(market.conditionId ?? market.id, this.config.discoveryTradesPerMarket);
+      trades.push(...marketTrades);
     }
     return trades;
   }
@@ -208,6 +241,7 @@ class PolymarketPaperBot {
     console.log("Polymarket paper scan complete");
     console.log(`Wallets scored: ${result.scores.length}`);
     console.log(`Markets scanned: ${result.markets.length}`);
+    console.log(`Discovered wallets: ${result.discovered}`);
     console.log(`Signals: ${result.signals}`);
     console.log(`Approved: ${result.approved}`);
     console.log(`Rejected: ${result.rejected}`);
@@ -238,6 +272,7 @@ class PolymarketPaperBot {
       `Last cycle: <b>${lastCycle}</b>`,
       `Markets: <b>${result?.markets.length ?? 0}</b>`,
       `Wallets scored: <b>${result?.scores.length ?? 0}</b>`,
+      `Discovered wallets: <b>${result?.discovered ?? 0}</b>`,
       `Signals: <b>${result?.signals ?? 0}</b>`,
       `Approved: <b>${result?.approved ?? 0}</b>`,
       `Rejected: <b>${result?.rejected ?? 0}</b>`,
@@ -252,6 +287,7 @@ class PolymarketPaperBot {
       "",
       `Markets scanned: <b>${result.markets.length}</b>`,
       `Wallets scored: <b>${result.scores.length}</b>`,
+      `Discovered wallets: <b>${result.discovered}</b>`,
       `Signals: <b>${result.signals}</b>`,
       `Approved: <b>${result.approved}</b>`,
       `Rejected: <b>${result.rejected}</b>`
@@ -275,18 +311,22 @@ class PolymarketPaperBot {
   }
 
   private telegramWallets(): string {
-    if (this.wallets.length === 0) {
+    const discovered = this.db.getTopDiscoveredWallets(10);
+    if (this.wallets.length === 0 && discovered.length === 0) {
       return [
         "👛 <b>Tracked Wallets</b>",
         "",
-        "No enabled wallets yet.",
-        "Edit <code>config/wallets.json</code> and set wallets to enabled."
+        "No enabled or discovered wallets yet.",
+        "Run /scan to discover wallets from recent Polymarket trades."
       ].join("\n");
     }
     return [
       "👛 <b>Tracked Wallets</b>",
       "",
-      ...this.wallets.map((wallet) => `• <code>${wallet.address}</code>${wallet.label ? ` - ${wallet.label}` : ""}`)
+      ...this.wallets.map((wallet) => `• <code>${wallet.address}</code>${wallet.label ? ` - ${wallet.label}` : ""}`),
+      "",
+      "🔍 <b>Top Discovered</b>",
+      ...discovered.map((wallet) => `• <code>${wallet.address}</code> score=${wallet.score} trades=${wallet.tradeCount} vol=$${wallet.totalVolume.toFixed(0)}`)
     ].join("\n");
   }
 
@@ -306,3 +346,10 @@ class PolymarketPaperBot {
 const mode = (process.argv[2] === "dev" ? "dev" : "scan") satisfies Mode;
 const bot = new PolymarketPaperBot();
 await bot.start(mode);
+
+function mergeScores(configured: WalletScore[], discovered: WalletScore[]): WalletScore[] {
+  const scores = new Map<string, WalletScore>();
+  for (const score of discovered) scores.set(score.wallet, score);
+  for (const score of configured) scores.set(score.wallet, score);
+  return [...scores.values()].sort((a, b) => b.score - a.score);
+}

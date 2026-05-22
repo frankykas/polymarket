@@ -1,6 +1,7 @@
 import { randomId } from "./db.js";
 import type {
   BotConfig,
+  DiscoveredWallet,
   ExitDecision,
   MarketQuality,
   MarketSnapshot,
@@ -15,6 +16,61 @@ import type {
   WalletScore,
   WalletTrade
 } from "./types.js";
+
+export function discoverWallets(trades: WalletTrade[], config: BotConfig, now = Date.now()): DiscoveredWallet[] {
+  const byWallet = new Map<string, WalletTrade[]>();
+  for (const trade of trades) {
+    const list = byWallet.get(trade.wallet) ?? [];
+    list.push(trade);
+    byWallet.set(trade.wallet, list);
+  }
+
+  const discovered: DiscoveredWallet[] = [];
+  for (const [address, walletTrades] of byWallet) {
+    const sorted = [...walletTrades].sort((a, b) => a.timestamp - b.timestamp);
+    const tradeCount = sorted.length;
+    const totalVolume = sorted.reduce((sum, trade) => sum + trade.price * trade.size, 0);
+    const uniqueMarkets = new Set(sorted.map((trade) => trade.marketId)).size;
+    const buyCount = sorted.filter((trade) => trade.side === "BUY").length;
+    const sellCount = sorted.filter((trade) => trade.side === "SELL").length;
+    const realizedPnlApprox = approximateRealizedPnl(sorted);
+    const flags: string[] = [];
+    if (tradeCount < config.minDiscoveryTrades) flags.push("LOW_TRADE_COUNT");
+    if (totalVolume < config.minDiscoveryVolume) flags.push("LOW_VOLUME");
+    if (uniqueMarkets <= 1 && tradeCount >= config.minDiscoveryTrades) flags.push("SINGLE_MARKET");
+    if (sellCount === 0) flags.push("NO_SELL_HISTORY");
+    if (realizedPnlApprox < 0) flags.push("NEGATIVE_REALIZED_APPROX");
+
+    const sampleScore = Math.min(25, (tradeCount / Math.max(1, config.minDiscoveryTrades)) * 18);
+    const volumeScore = Math.min(20, (totalVolume / Math.max(1, config.minDiscoveryVolume)) * 12);
+    const breadthScore = Math.min(15, uniqueMarkets * 4);
+    const activityScore = Math.min(15, sorted.filter((trade) => now - trade.timestamp <= 24 * 60 * 60 * 1000).length * 3);
+    const pnlScore = Math.max(0, Math.min(25, 12 + realizedPnlApprox));
+    const penalty = flags.includes("SINGLE_MARKET") ? 6 : 0;
+    const score = Math.round(Math.max(0, Math.min(100, sampleScore + volumeScore + breadthScore + activityScore + pnlScore - penalty)));
+
+    discovered.push({
+      address,
+      score,
+      tradeCount,
+      buyCount,
+      sellCount,
+      uniqueMarkets,
+      totalVolume,
+      avgTradeSize: tradeCount > 0 ? totalVolume / tradeCount : 0,
+      realizedPnlApprox,
+      profitFactorApprox: realizedPnlApprox > 0 ? Math.max(1, 1 + realizedPnlApprox / Math.max(1, totalVolume)) : 0,
+      flags,
+      firstSeenAt: sorted[0]?.timestamp ?? now,
+      lastSeenAt: sorted[sorted.length - 1]?.timestamp ?? now
+    });
+  }
+
+  return discovered
+    .filter((wallet) => wallet.tradeCount >= config.minDiscoveryTrades && wallet.totalVolume >= config.minDiscoveryVolume)
+    .sort((a, b) => b.score - a.score || b.totalVolume - a.totalVolume)
+    .slice(0, config.maxDiscoveredWallets);
+}
 
 export function scoreWallet(wallet: TrackedWallet, trades: WalletTrade[], now = Date.now()): WalletScore {
   const dayAgo = now - 24 * 60 * 60 * 1000;
@@ -42,6 +98,44 @@ export function scoreWallet(wallet: TrackedWallet, trades: WalletTrade[], now = 
     flags,
     updatedAt: now
   };
+}
+
+export function scoreDiscoveredWallet(wallet: DiscoveredWallet, now = Date.now()): WalletScore {
+  const flags = [...wallet.flags];
+  if (wallet.score < 60) flags.push("DISCOVERY_LOW_SCORE");
+  return {
+    wallet: wallet.address,
+    label: "discovered",
+    score: wallet.score,
+    tradeCount: wallet.tradeCount,
+    recentTradeCount: 0,
+    reliability: wallet.score >= 80 ? "HIGH" : wallet.score >= 55 ? "MEDIUM" : "LOW",
+    flags,
+    updatedAt: now
+  };
+}
+
+function approximateRealizedPnl(trades: WalletTrade[]): number {
+  const lots = new Map<string, { size: number; cost: number }>();
+  let pnl = 0;
+  for (const trade of trades) {
+    const key = `${trade.marketId}:${trade.outcome}`;
+    const lot = lots.get(key) ?? { size: 0, cost: 0 };
+    if (trade.side === "BUY") {
+      lot.size += trade.size;
+      lot.cost += trade.price * trade.size;
+      lots.set(key, lot);
+      continue;
+    }
+    if (lot.size <= 0) continue;
+    const sold = Math.min(lot.size, trade.size);
+    const avgCost = lot.cost / lot.size;
+    pnl += (trade.price - avgCost) * sold;
+    lot.size -= sold;
+    lot.cost = Math.max(0, lot.cost - avgCost * sold);
+    lots.set(key, lot);
+  }
+  return pnl;
 }
 
 export function evaluateMarketQuality(

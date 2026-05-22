@@ -116,7 +116,7 @@ export class TelegramAlerts {
       return;
     }
     if (normalized === "status") return this.sendTo(chatId, await handlers.status(), mainKeyboard());
-    if (normalized === "scan") return this.sendTo(chatId, await handlers.scan(), mainKeyboard());
+    if (normalized === "scan" || normalized === "discover") return this.sendTo(chatId, await handlers.scan(), mainKeyboard());
     if (normalized === "risk") return this.sendTo(chatId, await handlers.risk(), mainKeyboard());
     if (normalized === "wallets") return this.sendTo(chatId, await handlers.wallets(), mainKeyboard());
     if (normalized === "pause") return this.sendTo(chatId, await handlers.pause(), mainKeyboard());
@@ -200,7 +200,7 @@ function mainKeyboard(): InlineKeyboard {
     inline_keyboard: [
       [
         { text: "📊 Status", callback_data: "status" },
-        { text: "🔎 Scan", callback_data: "scan" }
+        { text: "🔎 Discover", callback_data: "discover" }
       ],
       [
         { text: "🛡 Risk", callback_data: "risk" },
@@ -227,6 +227,7 @@ function menuText(): string {
     "<b>Commands</b>",
     "/status - bot health",
     "/scan - run one paper scan",
+    "/discover - find profitable wallet candidates",
     "/risk - current limits",
     "/wallets - tracked wallets",
     "/pause - pause cycles",

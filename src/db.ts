@@ -2,6 +2,7 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type {
+  DiscoveredWallet,
   ExitDecision,
   MarketSnapshot,
   OrderBookSnapshot,
@@ -44,6 +45,22 @@ export class BotDatabase {
         recent_trade_count INTEGER NOT NULL,
         reliability TEXT NOT NULL,
         flags_json TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS discovered_wallets (
+        address TEXT PRIMARY KEY,
+        score REAL NOT NULL,
+        trade_count INTEGER NOT NULL,
+        buy_count INTEGER NOT NULL,
+        sell_count INTEGER NOT NULL,
+        unique_markets INTEGER NOT NULL,
+        total_volume REAL NOT NULL,
+        avg_trade_size REAL NOT NULL,
+        realized_pnl_approx REAL NOT NULL,
+        profit_factor_approx REAL NOT NULL,
+        flags_json TEXT NOT NULL,
+        first_seen_at INTEGER NOT NULL,
+        last_seen_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
       );
       CREATE TABLE IF NOT EXISTS markets (
@@ -170,6 +187,39 @@ export class BotDatabase {
       JSON.stringify(score.flags),
       score.updatedAt
     );
+  }
+
+  saveDiscoveredWallet(wallet: DiscoveredWallet): void {
+    this.db.prepare(`
+      INSERT OR REPLACE INTO discovered_wallets
+      (address, score, trade_count, buy_count, sell_count, unique_markets, total_volume, avg_trade_size,
+       realized_pnl_approx, profit_factor_approx, flags_json, first_seen_at, last_seen_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      wallet.address,
+      wallet.score,
+      wallet.tradeCount,
+      wallet.buyCount,
+      wallet.sellCount,
+      wallet.uniqueMarkets,
+      wallet.totalVolume,
+      wallet.avgTradeSize,
+      wallet.realizedPnlApprox,
+      wallet.profitFactorApprox,
+      JSON.stringify(wallet.flags),
+      wallet.firstSeenAt,
+      wallet.lastSeenAt,
+      Date.now()
+    );
+  }
+
+  getTopDiscoveredWallets(limit: number): DiscoveredWallet[] {
+    const rows = this.db.prepare(`
+      SELECT * FROM discovered_wallets
+      ORDER BY score DESC, total_volume DESC
+      LIMIT ?
+    `).all(limit) as unknown as DbDiscoveredWallet[];
+    return rows.map(rowToDiscoveredWallet);
   }
 
   saveMarket(market: MarketSnapshot): void {
@@ -334,6 +384,22 @@ interface DbPosition {
   status: "OPEN" | "CLOSED";
 }
 
+interface DbDiscoveredWallet {
+  address: string;
+  score: number;
+  trade_count: number;
+  buy_count: number;
+  sell_count: number;
+  unique_markets: number;
+  total_volume: number;
+  avg_trade_size: number;
+  realized_pnl_approx: number;
+  profit_factor_approx: number;
+  flags_json: string;
+  first_seen_at: number;
+  last_seen_at: number;
+}
+
 function rowToPosition(row: DbPosition): Position {
   return {
     id: row.id,
@@ -347,6 +413,24 @@ function rowToPosition(row: DbPosition): Position {
     openedAt: row.opened_at,
     updatedAt: row.updated_at,
     status: row.status
+  };
+}
+
+function rowToDiscoveredWallet(row: DbDiscoveredWallet): DiscoveredWallet {
+  return {
+    address: row.address,
+    score: row.score,
+    tradeCount: row.trade_count,
+    buyCount: row.buy_count,
+    sellCount: row.sell_count,
+    uniqueMarkets: row.unique_markets,
+    totalVolume: row.total_volume,
+    avgTradeSize: row.avg_trade_size,
+    realizedPnlApprox: row.realized_pnl_approx,
+    profitFactorApprox: row.profit_factor_approx,
+    flags: JSON.parse(row.flags_json) as string[],
+    firstSeenAt: row.first_seen_at,
+    lastSeenAt: row.last_seen_at
   };
 }
 

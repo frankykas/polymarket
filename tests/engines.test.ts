@@ -4,6 +4,7 @@ import {
   PaperExecutionEngine,
   decideExit,
   decideRisk,
+  discoverWallets,
   evaluateMarketQuality,
   generateSignals,
   scoreWallet
@@ -34,7 +35,14 @@ const config: BotConfig = {
   scanIntervalMs: 60000,
   walletActivityLimit: 100,
   marketScanLimit: 150,
-  maxWatchedMarkets: 40
+  maxWatchedMarkets: 40,
+  discoveryEnabled: true,
+  discoveryMarketLimit: 40,
+  discoveryTradesPerMarket: 100,
+  minDiscoveryTrades: 5,
+  minDiscoveryVolume: 50,
+  maxDiscoveredWallets: 25,
+  autoTrackDiscoveredWallets: true
 };
 
 const market: MarketSnapshot = {
@@ -78,6 +86,33 @@ test("wallet scoring flags low-sample wallets and scores active wallets higher",
   const score = scoreWallet({ address: "0xabc", enabled: true }, trades);
   assert.equal(score.reliability, "HIGH");
   assert.equal(score.flags.includes("LOW_SAMPLE"), false);
+});
+
+test("wallet discovery ranks active repeat traders and filters tiny samples", () => {
+  const trades: WalletTrade[] = [
+    ...Array.from({ length: 8 }, (_, index) => ({
+      wallet: "0xgood",
+      marketId: `m${index % 3}`,
+      outcome: "YES",
+      side: index < 6 ? "BUY" as const : "SELL" as const,
+      price: index < 6 ? 0.4 : 0.6,
+      size: 25,
+      timestamp: Date.now() - index * 1000
+    })),
+    {
+      wallet: "0xtiny",
+      marketId: "m1",
+      outcome: "YES",
+      side: "BUY",
+      price: 0.5,
+      size: 1,
+      timestamp: Date.now()
+    }
+  ];
+  const wallets = discoverWallets(trades, config);
+  assert.equal(wallets.length, 1);
+  assert.equal(wallets[0].address, "0xgood");
+  assert.ok(wallets[0].score > 50);
 });
 
 test("market quality rejects wide spread and low liquidity", () => {

@@ -20,6 +20,22 @@ export interface WalletTrade {
   raw?: unknown;
 }
 
+export interface DiscoveredWallet {
+  address: string;
+  score: number;
+  tradeCount: number;
+  buyCount: number;
+  sellCount: number;
+  uniqueMarkets: number;
+  totalVolume: number;
+  avgTradeSize: number;
+  realizedPnlApprox: number;
+  profitFactorApprox: number;
+  flags: string[];
+  firstSeenAt: number;
+  lastSeenAt: number;
+}
+
 export interface WalletScore {
   wallet: string;
   label?: string;
@@ -166,6 +182,13 @@ export interface BotConfig {
   walletActivityLimit: number;
   marketScanLimit: number;
   maxWatchedMarkets: number;
+  discoveryEnabled: boolean;
+  discoveryMarketLimit: number;
+  discoveryTradesPerMarket: number;
+  minDiscoveryTrades: number;
+  minDiscoveryVolume: number;
+  maxDiscoveredWallets: number;
+  autoTrackDiscoveredWallets: boolean;
 }
 
 export interface RuntimeEnv {

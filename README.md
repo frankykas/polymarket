@@ -40,6 +40,7 @@ Commands:
 /start   menu and controls
 /status  bot health and cycle stats
 /scan    manual one-shot paper scan
+/discover find profitable wallet candidates
 /risk    current risk limits
 /wallets tracked wallets
 /pause   pause scheduled cycles
