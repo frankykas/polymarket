@@ -21,6 +21,7 @@ interface CycleResult {
   markets: MarketSnapshot[];
   scores: WalletScore[];
   discovered: number;
+  discoveryTrades: number;
   signals: number;
   approved: number;
   rejected: number;
@@ -74,6 +75,7 @@ class PolymarketPaperBot {
       risk: () => this.telegramRisk(),
       wallets: () => this.telegramWallets(),
       topWallets: () => this.telegramTopWallets(),
+      performance: () => this.telegramPerformance(),
       pause: () => this.telegramPause(),
       resume: () => this.telegramResume()
     });
@@ -86,7 +88,7 @@ class PolymarketPaperBot {
   }
 
   private async runCycle(options: { placePaperOrders: boolean }): Promise<CycleResult> {
-    const result: CycleResult = { markets: [], scores: [], discovered: 0, signals: 0, approved: 0, rejected: 0 };
+    const result: CycleResult = { markets: [], scores: [], discovered: 0, discoveryTrades: 0, signals: 0, approved: 0, rejected: 0 };
     try {
       this.db.log("INFO", "cycle started", { placePaperOrders: options.placePaperOrders });
       const markets = await this.clients.gamma.getMarkets(this.config.marketScanLimit);
@@ -96,7 +98,9 @@ class PolymarketPaperBot {
       if (options.placePaperOrders) this.ws.connect(watchedMarkets.flatMap((market) => market.clobTokenIds));
 
       const discoveryTrades = this.config.discoveryEnabled ? await this.fetchDiscoveryTrades(watchedMarkets) : [];
-      const discovered = this.config.discoveryEnabled ? discoverWallets(discoveryTrades, this.config) : [];
+      result.discoveryTrades = discoveryTrades.length;
+      const walletPreviewPositions = this.config.discoveryEnabled ? await this.fetchPositionPreviews(discoveryTrades) : [];
+      const discovered = this.config.discoveryEnabled ? discoverWallets(discoveryTrades, this.config, Date.now(), walletPreviewPositions) : [];
       for (const wallet of discovered) this.db.saveDiscoveredWallet(wallet);
       result.discovered = discovered.length;
 
@@ -225,6 +229,13 @@ class PolymarketPaperBot {
           status: "CLOSED"
         });
         void this.telegram.sendExit({ outcome: position.outcome, marketId: position.marketId, reason: exit.reason });
+      } else {
+        const currentPrice = book.bestBid ?? book.lastTradePrice ?? position.currentPrice;
+        this.db.savePosition({
+          ...position,
+          currentPrice,
+          updatedAt: Date.now()
+        });
       }
     }
   }
@@ -243,6 +254,7 @@ class PolymarketPaperBot {
     console.log(`Wallets scored: ${result.scores.length}`);
     console.log(`Markets scanned: ${result.markets.length}`);
     console.log(`Discovered wallets: ${result.discovered}`);
+    console.log(`Discovery trades: ${result.discoveryTrades}`);
     console.log(`Signals: ${result.signals}`);
     console.log(`Approved: ${result.approved}`);
     console.log(`Rejected: ${result.rejected}`);
@@ -274,6 +286,7 @@ class PolymarketPaperBot {
       `Markets: <b>${result?.markets.length ?? 0}</b>`,
       `Wallets scored: <b>${result?.scores.length ?? 0}</b>`,
       `Discovered wallets: <b>${result?.discovered ?? 0}</b>`,
+      `Discovery trades: <b>${result?.discoveryTrades ?? 0}</b>`,
       `Signals: <b>${result?.signals ?? 0}</b>`,
       `Approved: <b>${result?.approved ?? 0}</b>`,
       `Rejected: <b>${result?.rejected ?? 0}</b>`,
@@ -289,9 +302,12 @@ class PolymarketPaperBot {
       `Markets scanned: <b>${result.markets.length}</b>`,
       `Wallets scored: <b>${result.scores.length}</b>`,
       `Discovered wallets: <b>${result.discovered}</b>`,
+      `Discovery trades: <b>${result.discoveryTrades}</b>`,
       `Signals: <b>${result.signals}</b>`,
       `Approved: <b>${result.approved}</b>`,
-      `Rejected: <b>${result.rejected}</b>`
+      `Rejected: <b>${result.rejected}</b>`,
+      "",
+      ...this.topWalletPreviewLines(5)
     ].join("\n");
   }
 
@@ -343,11 +359,30 @@ class PolymarketPaperBot {
         `<b>${index + 1}. Copy ${wallet.copyabilityScore}/100 | Score ${wallet.score}/100</b>`,
         `<code>${wallet.address}</code>`,
         `Trades ${wallet.tradeCount} | Markets ${wallet.uniqueMarkets} | Vol $${wallet.totalVolume.toFixed(0)}`,
+        `Open value~ $${wallet.openPositionValue.toFixed(2)} | Open PnL~ $${wallet.openPositionPnlApprox.toFixed(2)}`,
         `PnL~ $${wallet.realizedPnlApprox.toFixed(2)} | Win~ ${(wallet.winRateApprox * 100).toFixed(0)}% | Return~ ${(wallet.avgReturnPctApprox * 100).toFixed(1)}%`,
         `DD~ ${(wallet.maxDrawdownApprox * 100).toFixed(0)}% | Hold~ ${wallet.avgHoldMinutesApprox.toFixed(0)}m`,
         wallet.flags.length ? `Flags: ${wallet.flags.join(", ")}` : "Flags: clean",
         ""
       ])
+    ].join("\n");
+  }
+
+  private telegramPerformance(): string {
+    const report = this.db.getPerformanceReport();
+    return [
+      "📈 <b>Paper Performance</b>",
+      "",
+      `Total PnL: <b>$${report.totalPnl.toFixed(2)}</b>`,
+      `Realized: <b>$${report.realizedPnl.toFixed(2)}</b>`,
+      `Unrealized: <b>$${report.unrealizedPnl.toFixed(2)}</b>`,
+      `Open positions: <b>${report.openPositions}</b>`,
+      `Closed positions: <b>${report.closedPositions}</b>`,
+      `Win rate: <b>${(report.winRate * 100).toFixed(0)}%</b>`,
+      `Wins/Losses: <b>${report.wins}/${report.losses}</b>`,
+      `Signals: <b>${report.signals}</b>`,
+      `Paper orders: <b>${report.paperOrders}</b>`,
+      `Paper fills: <b>${report.paperFills}</b>`
     ].join("\n");
   }
 
@@ -361,6 +396,26 @@ class PolymarketPaperBot {
     this.paused = false;
     this.db.log("INFO", "bot resumed from Telegram");
     return "▶️ <b>Bot resumed.</b>\n\nScheduled paper scans are active.";
+  }
+
+  private async fetchPositionPreviews(trades: WalletTrade[]) {
+    const wallets = [...new Set(trades.map((trade) => trade.wallet))].slice(0, this.config.maxDiscoveredWallets);
+    const positions = [];
+    for (const wallet of wallets) {
+      positions.push(...await this.clients.data.getWalletPositions(wallet));
+    }
+    return positions;
+  }
+
+  private topWalletPreviewLines(limit: number): string[] {
+    const wallets = this.db.getTopDiscoveredWallets(limit);
+    if (wallets.length === 0) return ["No top-wallet preview yet. Try /discover again."];
+    return [
+      "🏆 <b>Top Wallet Preview</b>",
+      ...wallets.map((wallet, index) =>
+        `${index + 1}. <code>${wallet.address}</code> copy=${wallet.copyabilityScore} trades=${wallet.tradeCount} open~$${wallet.openPositionValue.toFixed(0)} pnl~$${wallet.openPositionPnlApprox.toFixed(0)}`
+      )
+    ];
   }
 }
 

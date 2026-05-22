@@ -117,6 +117,31 @@ test("wallet discovery ranks active repeat traders and filters tiny samples", ()
   assert.ok(wallets[0].winRateApprox > 0);
   assert.ok(wallets[0].avgReturnPctApprox > 0);
   assert.ok(wallets[0].avgHoldMinutesApprox >= 0);
+  assert.equal(wallets[0].openPositionCount, 0);
+});
+
+test("wallet discovery can include open position previews", () => {
+  const trades: WalletTrade[] = Array.from({ length: 6 }, (_, index) => ({
+    wallet: "0xpositions",
+    marketId: `m${index % 2}`,
+    outcome: "YES",
+    side: "BUY",
+    price: 0.5,
+    size: 20,
+    timestamp: Date.now() + index * 1000
+  }));
+  const wallets = discoverWallets(trades, config, Date.now(), [{
+    wallet: "0xpositions",
+    marketId: "m1",
+    outcome: "YES",
+    size: 40,
+    currentValue: 28,
+    cashPnl: 8,
+    percentPnl: 0.4
+  }]);
+  assert.equal(wallets[0].openPositionCount, 1);
+  assert.equal(wallets[0].openPositionValue, 28);
+  assert.equal(wallets[0].openPositionPnlApprox, 8);
 });
 
 test("market quality rejects wide spread and low liquidity", () => {

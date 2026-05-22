@@ -120,6 +120,7 @@ export class TelegramAlerts {
     if (normalized === "risk") return this.sendTo(chatId, await handlers.risk(), mainKeyboard());
     if (normalized === "wallets") return this.sendTo(chatId, await handlers.wallets(), mainKeyboard());
     if (normalized === "topwallets") return this.sendTo(chatId, await handlers.topWallets(), mainKeyboard());
+    if (normalized === "performance") return this.sendTo(chatId, await handlers.performance(), mainKeyboard());
     if (normalized === "pause") return this.sendTo(chatId, await handlers.pause(), mainKeyboard());
     if (normalized === "resume") return this.sendTo(chatId, await handlers.resume(), mainKeyboard());
     await this.sendTo(chatId, menuText(), mainKeyboard());
@@ -179,6 +180,7 @@ export interface TelegramHandlers {
   risk: () => string | Promise<string>;
   wallets: () => string | Promise<string>;
   topWallets: () => string | Promise<string>;
+  performance: () => string | Promise<string>;
   pause: () => string | Promise<string>;
   resume: () => string | Promise<string>;
 }
@@ -212,6 +214,9 @@ function mainKeyboard(): InlineKeyboard {
         { text: "🏆 Top Wallets", callback_data: "topwallets" }
       ],
       [
+        { text: "📈 Performance", callback_data: "performance" }
+      ],
+      [
         { text: "⏸ Pause", callback_data: "pause" },
         { text: "▶️ Resume", callback_data: "resume" }
       ]
@@ -234,6 +239,7 @@ function menuText(): string {
     "/scan - run one paper scan",
     "/discover - find profitable wallet candidates",
     "/topwallets - ranked wallet intelligence",
+    "/performance - paper PnL report",
     "/risk - current limits",
     "/wallets - tracked wallets",
     "/pause - pause cycles",

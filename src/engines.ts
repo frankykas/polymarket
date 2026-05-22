@@ -13,11 +13,18 @@ import type {
   Side,
   TradeSignal,
   TrackedWallet,
+  WalletPosition,
   WalletScore,
   WalletTrade
 } from "./types.js";
 
-export function discoverWallets(trades: WalletTrade[], config: BotConfig, now = Date.now()): DiscoveredWallet[] {
+export function discoverWallets(trades: WalletTrade[], config: BotConfig, now = Date.now(), positions: WalletPosition[] = []): DiscoveredWallet[] {
+  const positionsByWallet = new Map<string, WalletPosition[]>();
+  for (const position of positions) {
+    const list = positionsByWallet.get(position.wallet) ?? [];
+    list.push(position);
+    positionsByWallet.set(position.wallet, list);
+  }
   const byWallet = new Map<string, WalletTrade[]>();
   for (const trade of trades) {
     const list = byWallet.get(trade.wallet) ?? [];
@@ -28,6 +35,7 @@ export function discoverWallets(trades: WalletTrade[], config: BotConfig, now = 
   const discovered: DiscoveredWallet[] = [];
   for (const [address, walletTrades] of byWallet) {
     const sorted = [...walletTrades].sort((a, b) => a.timestamp - b.timestamp);
+    const walletPositions = positionsByWallet.get(address) ?? [];
     const tradeCount = sorted.length;
     const totalVolume = sorted.reduce((sum, trade) => sum + trade.price * trade.size, 0);
     const uniqueMarkets = new Set(sorted.map((trade) => trade.marketId)).size;
@@ -41,6 +49,7 @@ export function discoverWallets(trades: WalletTrade[], config: BotConfig, now = 
     if (uniqueMarkets <= 1 && tradeCount >= config.minDiscoveryTrades) flags.push("SINGLE_MARKET");
     if (sellCount === 0) flags.push("NO_SELL_HISTORY");
     if (realizedPnlApprox < 0) flags.push("NEGATIVE_REALIZED_APPROX");
+    if (walletPositions.length === 0) flags.push("NO_OPEN_POSITION_PREVIEW");
     if (performance.avgHoldMinutesApprox < 1 && sellCount > 0) flags.push("VERY_FAST_TRADER");
     if (performance.maxDrawdownApprox > 0.25) flags.push("HIGH_DRAWDOWN");
 
@@ -72,6 +81,9 @@ export function discoverWallets(trades: WalletTrade[], config: BotConfig, now = 
       avgReturnPctApprox: performance.avgReturnPctApprox,
       maxDrawdownApprox: performance.maxDrawdownApprox,
       avgHoldMinutesApprox: performance.avgHoldMinutesApprox,
+      openPositionCount: walletPositions.length,
+      openPositionValue: walletPositions.reduce((sum, position) => sum + position.currentValue, 0),
+      openPositionPnlApprox: walletPositions.reduce((sum, position) => sum + position.cashPnl, 0),
       flags,
       firstSeenAt: sorted[0]?.timestamp ?? now,
       lastSeenAt: sorted[sorted.length - 1]?.timestamp ?? now

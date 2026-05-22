@@ -1,4 +1,4 @@
-import type { MarketSnapshot, OrderBookSnapshot, PriceLevel, RuntimeEnv, WalletTrade } from "./types.js";
+import type { MarketSnapshot, OrderBookSnapshot, PriceLevel, RuntimeEnv, WalletPosition, WalletTrade } from "./types.js";
 
 export class GammaClient {
   constructor(private baseUrl: string) {}
@@ -51,6 +51,24 @@ export class DataClient {
         const data = await getJson<unknown[]>(new URL(path, this.baseUrl));
         const trades = data.map((item) => normalizeWalletTrade(wallet, item)).filter((trade): trade is WalletTrade => Boolean(trade));
         if (trades.length > 0) return trades;
+      } catch {
+        continue;
+      }
+    }
+    return [];
+  }
+
+  async getWalletPositions(wallet: string): Promise<WalletPosition[]> {
+    const candidates = [
+      `/positions?user=${wallet}`,
+      `/positions?user=${wallet}&sizeThreshold=0`,
+      `/v1/positions?user=${wallet}`
+    ];
+
+    for (const path of candidates) {
+      try {
+        const data = await getJson<unknown[]>(new URL(path, this.baseUrl));
+        return data.map((item) => normalizeWalletPosition(wallet, item)).filter((position): position is WalletPosition => Boolean(position));
       } catch {
         continue;
       }
@@ -225,6 +243,26 @@ function normalizeWalletTrade(wallet: string | undefined, raw: unknown): WalletT
     price,
     size,
     timestamp,
+    raw
+  };
+}
+
+function normalizeWalletPosition(wallet: string, raw: unknown): WalletPosition | undefined {
+  const item = raw as Record<string, unknown>;
+  const size = numberFrom(item.size ?? item.positionSize ?? item.tokens ?? item.balance);
+  const currentValue = numberFrom(item.currentValue ?? item.value ?? item.marketValue ?? item.usdcValue);
+  const cashPnl = numberFrom(item.cashPnl ?? item.pnl ?? item.realizedPnl ?? item.unrealizedPnl);
+  const percentPnl = numberFrom(item.percentPnl ?? item.percentPnL ?? item.pnlPercent);
+  if (size <= 0 && currentValue <= 0) return undefined;
+  return {
+    wallet: wallet.toLowerCase(),
+    marketId: stringOrUndefined(item.conditionId ?? item.market ?? item.marketId),
+    tokenId: stringOrUndefined(item.asset ?? item.assetId ?? item.tokenId),
+    outcome: stringOrUndefined(item.outcome),
+    size,
+    currentValue,
+    cashPnl,
+    percentPnl,
     raw
   };
 }

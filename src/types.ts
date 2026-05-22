@@ -20,6 +20,18 @@ export interface WalletTrade {
   raw?: unknown;
 }
 
+export interface WalletPosition {
+  wallet: string;
+  marketId?: string;
+  tokenId?: string;
+  outcome?: string;
+  size: number;
+  currentValue: number;
+  cashPnl: number;
+  percentPnl: number;
+  raw?: unknown;
+}
+
 export interface DiscoveredWallet {
   address: string;
   score: number;
@@ -36,6 +48,9 @@ export interface DiscoveredWallet {
   avgReturnPctApprox: number;
   maxDrawdownApprox: number;
   avgHoldMinutesApprox: number;
+  openPositionCount: number;
+  openPositionValue: number;
+  openPositionPnlApprox: number;
   flags: string[];
   firstSeenAt: number;
   lastSeenAt: number;
@@ -160,6 +175,21 @@ export interface ExitDecision {
   decision: "HOLD" | "PARTIAL_EXIT" | "FULL_EXIT";
   exitProbability: number;
   reason: string;
+}
+
+export interface PerformanceReport {
+  openPositions: number;
+  closedPositions: number;
+  realizedPnl: number;
+  unrealizedPnl: number;
+  totalPnl: number;
+  wins: number;
+  losses: number;
+  winRate: number;
+  paperOrders: number;
+  paperFills: number;
+  signals: number;
+  approvedSignals: number;
 }
 
 export interface BotConfig {

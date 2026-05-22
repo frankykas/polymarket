@@ -8,6 +8,7 @@ import type {
   OrderBookSnapshot,
   PaperFill,
   PaperOrder,
+  PerformanceReport,
   Position,
   RiskDecision,
   TradeSignal,
@@ -63,6 +64,9 @@ export class BotDatabase {
         avg_return_pct_approx REAL NOT NULL DEFAULT 0,
         max_drawdown_approx REAL NOT NULL DEFAULT 0,
         avg_hold_minutes_approx REAL NOT NULL DEFAULT 0,
+        open_position_count INTEGER NOT NULL DEFAULT 0,
+        open_position_value REAL NOT NULL DEFAULT 0,
+        open_position_pnl_approx REAL NOT NULL DEFAULT 0,
         flags_json TEXT NOT NULL,
         first_seen_at INTEGER NOT NULL,
         last_seen_at INTEGER NOT NULL,
@@ -179,7 +183,10 @@ export class BotDatabase {
       ["win_rate_approx", "REAL NOT NULL DEFAULT 0"],
       ["avg_return_pct_approx", "REAL NOT NULL DEFAULT 0"],
       ["max_drawdown_approx", "REAL NOT NULL DEFAULT 0"],
-      ["avg_hold_minutes_approx", "REAL NOT NULL DEFAULT 0"]
+      ["avg_hold_minutes_approx", "REAL NOT NULL DEFAULT 0"],
+      ["open_position_count", "INTEGER NOT NULL DEFAULT 0"],
+      ["open_position_value", "REAL NOT NULL DEFAULT 0"],
+      ["open_position_pnl_approx", "REAL NOT NULL DEFAULT 0"]
     ];
     for (const [name, definition] of missing) {
       if (!columns.has(name)) this.db.exec(`ALTER TABLE discovered_wallets ADD COLUMN ${name} ${definition}`);
@@ -216,8 +223,9 @@ export class BotDatabase {
       INSERT OR REPLACE INTO discovered_wallets
       (address, score, copyability_score, trade_count, buy_count, sell_count, unique_markets, total_volume, avg_trade_size,
        realized_pnl_approx, profit_factor_approx, win_rate_approx, avg_return_pct_approx, max_drawdown_approx,
-       avg_hold_minutes_approx, flags_json, first_seen_at, last_seen_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       avg_hold_minutes_approx, open_position_count, open_position_value, open_position_pnl_approx,
+       flags_json, first_seen_at, last_seen_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       wallet.address,
       wallet.score,
@@ -234,6 +242,9 @@ export class BotDatabase {
       wallet.avgReturnPctApprox,
       wallet.maxDrawdownApprox,
       wallet.avgHoldMinutesApprox,
+      wallet.openPositionCount,
+      wallet.openPositionValue,
+      wallet.openPositionPnlApprox,
       JSON.stringify(wallet.flags),
       wallet.firstSeenAt,
       wallet.lastSeenAt,
@@ -390,6 +401,38 @@ export class BotDatabase {
     return rows.map(rowToPosition);
   }
 
+  getPerformanceReport(): PerformanceReport {
+    const openRows = this.db.prepare("SELECT * FROM positions WHERE status = 'OPEN'").all() as unknown as DbPosition[];
+    const closedRows = this.db.prepare("SELECT * FROM positions WHERE status = 'CLOSED'").all() as unknown as DbPosition[];
+    const paperOrders = this.count("paper_orders");
+    const paperFills = this.count("paper_fills");
+    const signals = this.count("signals");
+    const approvedSignals = this.count("paper_orders");
+    const realizedPnl = closedRows.reduce((sum, row) => sum + row.realized_pnl, 0);
+    const unrealizedPnl = openRows.reduce((sum, row) => sum + (row.current_price - row.avg_entry_price) * row.size, 0);
+    const wins = closedRows.filter((row) => row.realized_pnl > 0).length;
+    const losses = closedRows.filter((row) => row.realized_pnl < 0).length;
+    return {
+      openPositions: openRows.length,
+      closedPositions: closedRows.length,
+      realizedPnl,
+      unrealizedPnl,
+      totalPnl: realizedPnl + unrealizedPnl,
+      wins,
+      losses,
+      winRate: wins + losses > 0 ? wins / (wins + losses) : 0,
+      paperOrders,
+      paperFills,
+      signals,
+      approvedSignals
+    };
+  }
+
+  private count(table: string): number {
+    const row = this.db.prepare(`SELECT COUNT(*) as count FROM ${table}`).get() as { count: number };
+    return Number(row.count ?? 0);
+  }
+
   log(level: "INFO" | "WARN" | "ERROR", message: string, payload?: unknown): void {
     this.db.prepare(`
       INSERT INTO bot_run_logs (level, message, payload_json, created_at)
@@ -428,6 +471,9 @@ interface DbDiscoveredWallet {
   avg_return_pct_approx: number;
   max_drawdown_approx: number;
   avg_hold_minutes_approx: number;
+  open_position_count: number;
+  open_position_value: number;
+  open_position_pnl_approx: number;
   flags_json: string;
   first_seen_at: number;
   last_seen_at: number;
@@ -466,6 +512,9 @@ function rowToDiscoveredWallet(row: DbDiscoveredWallet): DiscoveredWallet {
     avgReturnPctApprox: row.avg_return_pct_approx,
     maxDrawdownApprox: row.max_drawdown_approx,
     avgHoldMinutesApprox: row.avg_hold_minutes_approx,
+    openPositionCount: row.open_position_count,
+    openPositionValue: row.open_position_value,
+    openPositionPnlApprox: row.open_position_pnl_approx,
     flags: JSON.parse(row.flags_json) as string[],
     firstSeenAt: row.first_seen_at,
     lastSeenAt: row.last_seen_at
