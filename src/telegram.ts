@@ -2,6 +2,33 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import type { RuntimeEnv } from "./types.js";
 
+const ICON = {
+  online: "\u{1F7E2}",
+  buy: "\u{1F4C8}",
+  target: "\u{1F3AF}",
+  pin: "\u{1F4CC}",
+  money: "\u{1F4B5}",
+  box: "\u{1F4E6}",
+  chart: "\u{1F4CA}",
+  search: "\u{1F50E}",
+  shield: "\u{1F6E1}",
+  wallet: "\u{1F45B}",
+  trophy: "\u{1F3C6}",
+  pause: "\u{23F8}",
+  resume: "\u{25B6}\u{FE0F}",
+  reject: "\u{1F534}",
+  exit: "\u{1F7E1}",
+  door: "\u{1F6AA}",
+  alert: "\u{1F6A8}",
+  bot: "\u{1F916}",
+  lab: "\u{1F9EA}",
+  radio: "\u{1F4E1}",
+  tag: "\u{1F3F7}\u{FE0F}",
+  clipboard: "\u{1F4CB}",
+  check: "\u{2705}",
+  info: "\u{2139}\u{FE0F}"
+} as const;
+
 export class TelegramAlerts {
   private enabled: boolean;
   private offset = 0;
@@ -20,11 +47,11 @@ export class TelegramAlerts {
 
   async sendStartup(): Promise<void> {
     await this.send([
-      "🟢 <b>Polymarket Paper Bot Online</b>",
+      `${ICON.online} <b>StratiFi Online</b>`,
       "",
-      "🧪 Mode: <b>Paper trading only</b>",
-      "📡 Feeds: Gamma + Data + CLOB",
-      "🛡 Risk engine: <b>enabled</b>",
+      `${ICON.lab} Mode: <b>Paper trading only</b>`,
+      `${ICON.radio} Feeds: Gamma + Data + CLOB`,
+      `${ICON.shield} Risk engine: <b>enabled</b>`,
       "",
       "Use /menu to open controls."
     ].join("\n"));
@@ -32,53 +59,58 @@ export class TelegramAlerts {
 
   async sendApproved(input: { outcome: string; question: string; price: number; size: number; confidence: number }): Promise<void> {
     await this.send([
-      "🟢 <b>BUY Signal Approved</b>",
+      `${ICON.buy} <b>BUY Signal Approved</b>`,
       "",
-      `🎯 <b>${escapeHtml(input.outcome)}</b>`,
-      `📌 ${escapeHtml(input.question)}`,
-      `💵 Limit: <b>${input.price.toFixed(3)}</b>`,
-      `📦 Size: <b>$${input.size.toFixed(2)}</b>`,
-      `📊 Confidence: <b>${input.confidence}</b>`
+      `${ICON.target} Outcome: <b>${escapeHtml(input.outcome)}</b>`,
+      `${ICON.pin} Market: ${escapeHtml(input.question)}`,
+      `${ICON.money} Limit: <b>${input.price.toFixed(3)}</b>`,
+      `${ICON.box} Size: <b>$${input.size.toFixed(2)}</b>`,
+      `${ICON.chart} Confidence: <b>${input.confidence}</b>`,
+      "",
+      `${ICON.info} Paper mode only. No live order was placed.`
     ].join("\n"));
   }
 
   async sendRejected(input: { question: string; reason: string }): Promise<void> {
     await this.send([
-      "🔴 <b>Signal Rejected</b>",
+      `${ICON.reject} <b>Signal Rejected</b>`,
       "",
-      `📌 ${escapeHtml(input.question)}`,
-      `🛡 ${escapeHtml(input.reason)}`
+      `${ICON.pin} ${escapeHtml(input.question)}`,
+      `${ICON.shield} ${escapeHtml(input.reason)}`
     ].join("\n"));
   }
 
   async sendRejectedSummary(input: { rejected: number; reasons: Map<string, number> }): Promise<void> {
     const topReasons = [...input.reasons.entries()]
       .sort((a, b) => b[1] - a[1])
-      .slice(0, 4)
-      .map(([reason, count]) => `- <b>${count}</b> ${escapeHtml(reason)}`);
+      .slice(0, 5)
+      .map(([reason, count]) => `${ICON.shield} <b>${count}</b> ${escapeHtml(reason)}`);
     await this.send([
-      "ðŸ”´ <b>Rejected Signal Summary</b>",
+      `${ICON.clipboard} <b>Risk Filter Summary</b>`,
       "",
-      `Ignored: <b>${input.rejected}</b>`,
+      `${ICON.reject} Candidates ignored: <b>${input.rejected}</b>`,
+      `${ICON.check} Approved BUY alerts are sent separately.`,
+      "",
+      "<b>Top reasons</b>",
       ...topReasons,
       "",
-      "Approved buys are still sent one-by-one."
+      `${ICON.info} These are normal skips, not bot errors.`
     ].join("\n"));
   }
 
   async sendExit(input: { outcome: string; marketId: string; reason: string }): Promise<void> {
     await this.send([
-      "🟡 <b>Paper Exit</b>",
+      `${ICON.exit} <b>Paper Exit</b>`,
       "",
-      `🎯 <b>${escapeHtml(input.outcome)}</b>`,
-      `🏷 Market: <code>${escapeHtml(input.marketId)}</code>`,
-      `🚪 Reason: ${escapeHtml(input.reason)}`
+      `${ICON.target} <b>${escapeHtml(input.outcome)}</b>`,
+      `${ICON.tag} Market: <code>${escapeHtml(input.marketId)}</code>`,
+      `${ICON.door} Reason: ${escapeHtml(input.reason)}`
     ].join("\n"));
   }
 
   async sendError(message: string): Promise<void> {
     await this.send([
-      "🚨 <b>Bot Error</b>",
+      `${ICON.alert} <b>Bot Error</b>`,
       "",
       `<code>${escapeHtml(message)}</code>`
     ].join("\n"));
@@ -220,22 +252,22 @@ function mainKeyboard(): InlineKeyboard {
   return {
     inline_keyboard: [
       [
-        { text: "📊 Status", callback_data: "status" },
-        { text: "🔎 Discover", callback_data: "discover" }
+        { text: `${ICON.chart} Status`, callback_data: "status" },
+        { text: `${ICON.search} Discover`, callback_data: "discover" }
       ],
       [
-        { text: "🛡 Risk", callback_data: "risk" },
-        { text: "👛 Wallets", callback_data: "wallets" }
+        { text: `${ICON.shield} Risk`, callback_data: "risk" },
+        { text: `${ICON.wallet} Wallets`, callback_data: "wallets" }
       ],
       [
-        { text: "🏆 Top Wallets", callback_data: "topwallets" }
+        { text: `${ICON.trophy} Top Wallets`, callback_data: "topwallets" }
       ],
       [
-        { text: "📈 Performance", callback_data: "performance" }
+        { text: `${ICON.buy} Performance`, callback_data: "performance" }
       ],
       [
-        { text: "⏸ Pause", callback_data: "pause" },
-        { text: "▶️ Resume", callback_data: "resume" }
+        { text: `${ICON.pause} Pause`, callback_data: "pause" },
+        { text: `${ICON.resume} Resume`, callback_data: "resume" }
       ]
     ]
   };
@@ -243,13 +275,13 @@ function mainKeyboard(): InlineKeyboard {
 
 function menuText(): string {
   return [
-    "🤖 <b>Polymarket Paper Bot</b>",
+    `${ICON.bot} <b>StratiFi Paper Bot</b>`,
     "",
-    "🟢 Buy signals",
-    "🔴 Rejected trades / sells",
-    "🟡 Exits",
-    "🛡 Risk controls",
-    "📊 Status and scan tools",
+    `${ICON.buy} Buy signals`,
+    `${ICON.reject} Risk-filter summaries`,
+    `${ICON.exit} Paper exits`,
+    `${ICON.shield} Risk controls`,
+    `${ICON.chart} Status and scan tools`,
     "",
     "<b>Commands</b>",
     "/status - bot health",

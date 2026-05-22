@@ -83,8 +83,38 @@ function indexHtml(): string {
     }
     .topbar, main { max-width: 1380px; margin: 0 auto; }
     .topbar { display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; }
-    h1 { margin: 0; font-size: 40px; line-height: 1.05; font-weight: 760; }
-    .subtitle { margin: 10px 0 0; color: var(--muted); max-width: 760px; line-height: 1.5; }
+    .brand {
+      display: grid;
+      grid-template-columns: 96px minmax(0, 1fr);
+      gap: 18px;
+      align-items: center;
+      max-width: 780px;
+    }
+    .brand-mark {
+      width: 96px;
+      aspect-ratio: 1;
+      filter: drop-shadow(0 14px 28px rgba(0, 194, 255, 0.18));
+    }
+    .brand-word {
+      font-size: 48px;
+      line-height: 1;
+      font-weight: 780;
+      color: #f8f9fb;
+    }
+    .brand-word .accent {
+      color: #16a4ff;
+    }
+    .brand-line {
+      margin-top: 12px;
+      color: #f5f7f9;
+      font-size: 13px;
+      font-weight: 760;
+      text-transform: uppercase;
+      letter-spacing: 3px;
+    }
+    .brand-line .teal { color: #19e5d1; }
+    .brand-line .blue { color: #168fff; }
+    .subtitle { margin: 16px 0 0; color: var(--muted); max-width: 760px; line-height: 1.5; }
     .status { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
     .pill {
       border: 1px solid var(--line);
@@ -140,7 +170,10 @@ function indexHtml(): string {
     }
     @media (max-width: 720px) {
       header { padding: 20px; }
-      h1 { font-size: 31px; }
+      .brand { grid-template-columns: 72px minmax(0, 1fr); gap: 12px; }
+      .brand-mark { width: 72px; }
+      .brand-word { font-size: 34px; }
+      .brand-line { font-size: 10px; letter-spacing: 1.7px; }
       .topbar { display: block; }
       .status { justify-content: flex-start; margin-top: 16px; }
       main { padding: 18px 14px 32px; }
@@ -153,7 +186,32 @@ function indexHtml(): string {
   <header>
     <div class="topbar">
       <div>
-        <h1>StratiFi</h1>
+        <div class="brand" aria-label="StratiFi">
+          <svg class="brand-mark" viewBox="0 0 120 120" role="img" aria-label="StratiFi mark">
+            <defs>
+              <linearGradient id="stratifiMark" x1="24" y1="10" x2="92" y2="110" gradientUnits="userSpaceOnUse">
+                <stop offset="0" stop-color="#2ffff0"/>
+                <stop offset="0.48" stop-color="#02c6df"/>
+                <stop offset="1" stop-color="#075bff"/>
+              </linearGradient>
+              <filter id="markGlow" x="-20%" y="-20%" width="140%" height="140%">
+                <feGaussianBlur stdDeviation="2.5" result="blur"/>
+                <feColorMatrix in="blur" type="matrix" values="0 0 0 0 0.08 0 0 0 0 0.95 0 0 0 0 1 0 0 0 0.5 0"/>
+                <feMerge>
+                  <feMergeNode/>
+                  <feMergeNode in="SourceGraphic"/>
+                </feMerge>
+              </filter>
+            </defs>
+            <path filter="url(#markGlow)" d="M87 9 34 34C19 41 13 58 23 72c4 6 10 10 17 13l25 11-38 17c-3 1-5-1-4-4l7-35 41-18-37-16 60-29c4-2 7 1 6 5l-8 29c-1 5-4 8-9 10L55 69l28 13c14 7 17 24 4 35H61c9-6 8-14-1-18L25 83C3 73-1 43 22 30L84 1c4-2 7 3 3 8Z" fill="url(#stratifiMark)"/>
+            <path d="M23 83c9 5 22 11 39 17 6 2 8 7 4 12h18c8-9 5-22-6-27L47 70 25 80c-2 1-3 2-2 3Z" fill="#0455df" opacity="0.55"/>
+            <path d="M91 14 35 40c-12 6-17 19-9 29" fill="none" stroke="#9ffff5" stroke-width="3" stroke-linecap="round" opacity="0.65"/>
+          </svg>
+          <div>
+            <div class="brand-word">Strati<span class="accent">Fi</span></div>
+            <div class="brand-line"><span class="teal">AI-Assisted</span> &bull; Prediction Markets &bull; <span class="blue">Intelligence</span></div>
+          </div>
+        </div>
         <p class="subtitle">Paper-trading command center for wallet intelligence, shadow-copy evidence, source quality, and agent decisions.</p>
       </div>
       <div class="status">
