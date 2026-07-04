@@ -801,21 +801,37 @@ export class BotDatabase {
   }
 
   getPerformanceReport(): PerformanceReport {
-    const openRows = this.db.prepare("SELECT * FROM positions WHERE status = 'OPEN'").all() as unknown as DbPosition[];
-    const closedRows = this.db.prepare("SELECT * FROM positions WHERE status = 'CLOSED'").all() as unknown as DbPosition[];
+    const openRow = this.db.prepare(`
+      SELECT
+        COUNT(*) as count,
+        COALESCE(SUM(avg_entry_price * size), 0) as open_cost,
+        COALESCE(SUM(current_price * size), 0) as open_value,
+        COALESCE(SUM((current_price - avg_entry_price) * size), 0) as unrealized_pnl
+      FROM positions
+      WHERE status = 'OPEN'
+    `).get() as { count: number; open_cost: number; open_value: number; unrealized_pnl: number };
+    const closedRow = this.db.prepare(`
+      SELECT
+        COUNT(*) as count,
+        COALESCE(SUM(realized_pnl), 0) as realized_pnl,
+        SUM(CASE WHEN realized_pnl > 0 THEN 1 ELSE 0 END) as wins,
+        SUM(CASE WHEN realized_pnl < 0 THEN 1 ELSE 0 END) as losses
+      FROM positions
+      WHERE status = 'CLOSED'
+    `).get() as { count: number; realized_pnl: number; wins: number | null; losses: number | null };
     const paperOrders = this.count("paper_orders");
     const paperFills = this.count("paper_fills");
     const signals = this.count("signals");
     const approvedSignals = this.count("paper_orders");
-    const openCost = openRows.reduce((sum, row) => sum + row.avg_entry_price * row.size, 0);
-    const openValue = openRows.reduce((sum, row) => sum + row.current_price * row.size, 0);
-    const realizedPnl = closedRows.reduce((sum, row) => sum + row.realized_pnl, 0);
-    const unrealizedPnl = openRows.reduce((sum, row) => sum + (row.current_price - row.avg_entry_price) * row.size, 0);
-    const wins = closedRows.filter((row) => row.realized_pnl > 0).length;
-    const losses = closedRows.filter((row) => row.realized_pnl < 0).length;
+    const openCost = Number(openRow.open_cost ?? 0);
+    const openValue = Number(openRow.open_value ?? 0);
+    const realizedPnl = Number(closedRow.realized_pnl ?? 0);
+    const unrealizedPnl = Number(openRow.unrealized_pnl ?? 0);
+    const wins = Number(closedRow.wins ?? 0);
+    const losses = Number(closedRow.losses ?? 0);
     return {
-      openPositions: openRows.length,
-      closedPositions: closedRows.length,
+      openPositions: Number(openRow.count ?? 0),
+      closedPositions: Number(closedRow.count ?? 0),
       openCost,
       openValue,
       realizedPnl,
@@ -1242,9 +1258,14 @@ export class BotDatabase {
   getWalletDegradationReport(days = 14, limit = 20): WalletDegradationReport[] {
     const since = Date.now() - days * 24 * 60 * 60 * 1000;
     const rows = this.db.prepare(`
-      SELECT wallet, NULL as label, score, copyability_score, dominant_category, created_at
-      FROM source_score_snapshots
-      WHERE created_at >= ?
+      SELECT *
+      FROM (
+        SELECT wallet, NULL as label, score, copyability_score, dominant_category, created_at
+        FROM source_score_snapshots
+        WHERE created_at >= ?
+        ORDER BY created_at DESC
+        LIMIT 5000
+      )
       ORDER BY wallet ASC, created_at ASC
     `).all(since) as Array<{
       wallet: string;
@@ -1326,10 +1347,15 @@ export class BotDatabase {
   getReconstructedSourcePositions(limit = 80): ReconstructedSourcePosition[] {
     const rows = this.db.prepare(`
       SELECT wt.*, m.question, m.raw_json
-      FROM wallet_trades wt
+      FROM (
+        SELECT *
+        FROM wallet_trades
+        ORDER BY timestamp DESC
+        LIMIT ?
+      ) wt
       LEFT JOIN markets m ON m.id = wt.market_id OR m.condition_id = wt.market_id
       ORDER BY wt.wallet ASC, wt.market_id ASC, wt.outcome ASC, wt.timestamp ASC
-    `).all() as unknown as Array<DbWalletTrade & { question: string | null; raw_json: string | null }>;
+    `).all(Math.max(limit * 120, 2000)) as unknown as Array<DbWalletTrade & { question: string | null; raw_json: string | null }>;
     const positions = new Map<string, ReconstructedSourcePosition>();
     for (const row of rows) {
       const key = `${row.wallet}:${row.market_id}:${row.outcome.toLowerCase()}`;

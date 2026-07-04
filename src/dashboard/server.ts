@@ -7,7 +7,7 @@ import { loadBotConfig, loadRuntimeEnv } from "../config.js";
 import { BotDatabase } from "../db.js";
 import { adminControlHtml } from "./adminControlView.js";
 import { landingHtml } from "./landingView.js";
-import { buildAdminDashboardReadModel, buildDashboardReadModel, buildPublicTrackerReadModel } from "./readModel.js";
+import { buildAdminDashboardReadModel, buildDashboardReadModel, buildPublicTrackerReadModelFromDb, type DashboardReadModel } from "./readModel.js";
 import { trackerHtml } from "./trackerView.js";
 import { indexHtml } from "./view.js";
 
@@ -17,6 +17,7 @@ const config = loadBotConfig();
 const db = new BotDatabase(env.dbPath);
 const port = Number(process.env.DASHBOARD_PORT || 8787);
 const publicDir = join(process.cwd(), "public");
+let dashboardCache: { value: DashboardReadModel; createdAt: number } | undefined;
 
 const server = createServer((request, response) => {
   void handleRequest(request, response).catch((error: unknown) => {
@@ -36,11 +37,12 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     config.maxTimeToResolutionHours
   );
   if (url.pathname === "/api/dashboard") {
-    sendJson(response, dashboard());
+    sendJson(response, cachedDashboard(dashboard));
     return;
   }
   if (url.pathname === "/api/tracker") {
-    sendJson(response, buildPublicTrackerReadModel(dashboard(), {
+    sendJson(response, buildPublicTrackerReadModelFromDb(db, {
+      bankroll: config.bankroll,
       name: env.publicTrackerName,
       walletAddress: env.publicTrackerWalletAddress,
       disclosure: env.publicTrackerDisclosure
@@ -153,6 +155,14 @@ function canAccessAdmin(request: IncomingMessage, url: URL): boolean {
   if (token) return providedToken === token;
   const host = request.headers.host?.split(":")[0]?.toLowerCase() ?? "localhost";
   return host === "localhost" || host === "127.0.0.1" || host === "::1";
+}
+
+function cachedDashboard(build: () => DashboardReadModel): DashboardReadModel {
+  const now = Date.now();
+  if (dashboardCache && now - dashboardCache.createdAt < 15000) return dashboardCache.value;
+  const value = build();
+  dashboardCache = { value, createdAt: now };
+  return value;
 }
 
 async function getServiceStatus(): Promise<{ bot: string; dashboard: string; generatedAt: number }> {

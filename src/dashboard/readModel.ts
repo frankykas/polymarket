@@ -298,3 +298,81 @@ export function buildPublicTrackerReadModel(
     recentSignals: dashboard.signals.slice(0, 12)
   };
 }
+
+export function buildPublicTrackerReadModelFromDb(
+  db: BotDatabase,
+  input: {
+    bankroll: number;
+    name?: string;
+    walletAddress?: string;
+    disclosure?: string;
+  }
+): PublicTrackerReadModel {
+  const openPositions = db.getOpenPositions();
+  const closedPositionRows = db.getClosedPositions(20);
+  const recentSignals = db.getRecentSignals(12);
+  const performance = publicPerformance(db.getPerformanceReport());
+  const marketIds = [
+    ...openPositions.map((position) => position.marketId),
+    ...closedPositionRows.map((position) => position.marketId),
+    ...recentSignals.map((signal) => signal.marketId)
+  ];
+  const markets = new Map(db.getMarketsByIds(marketIds).map((market) => [market.id, market.question]));
+  const sourceSummary = db.getSourceScoreSummary();
+  return {
+    generatedAt: Date.now(),
+    name: input.name || "StratiFi Paper Tracker",
+    walletAddress: input.walletAddress,
+    disclosure: input.disclosure || "Paper trading tracker. No live Polymarket orders are placed by this bot.",
+    mode: "PAPER",
+    capital: {
+      startingBankroll: input.bankroll,
+      availableCash: input.bankroll - performance.openCost + performance.realizedPnl,
+      deployedCost: performance.openCost,
+      openValue: performance.openValue,
+      realizedPnl: performance.realizedPnl,
+      equity: input.bankroll + performance.totalPnl
+    },
+    performance,
+    tradeLedger: db.getPaperTradeLedger(input.bankroll, 30),
+    positions: openPositions.slice(0, 20).map((position) => ({
+      id: position.id,
+      profile: position.profile,
+      marketId: position.marketId,
+      market: markets.get(position.marketId) ?? position.marketId,
+      outcome: position.outcome,
+      size: position.size,
+      entryCost: position.avgEntryPrice * position.size,
+      currentValue: position.currentPrice * position.size,
+      avgEntryPrice: position.avgEntryPrice,
+      currentPrice: position.currentPrice,
+      unrealizedPnl: (position.currentPrice - position.avgEntryPrice) * position.size,
+      openedAt: position.openedAt
+    })),
+    closedPositions: closedPositionRows.map((position) => ({
+      id: position.id,
+      profile: position.profile,
+      marketId: position.marketId,
+      market: markets.get(position.marketId) ?? position.marketId,
+      outcome: position.outcome,
+      size: position.size,
+      entryCost: position.avgEntryPrice * position.size,
+      exitValue: position.currentPrice * position.size,
+      avgEntryPrice: position.avgEntryPrice,
+      currentPrice: position.currentPrice,
+      realizedPnl: position.realizedPnl,
+      returnPct: position.avgEntryPrice > 0 ? (position.currentPrice - position.avgEntryPrice) / position.avgEntryPrice : 0,
+      updatedAt: position.updatedAt
+    })),
+    sourceSummary: {
+      reliabilityMix: sourceSummary.highReliability > 0 ? "HIGH" : sourceSummary.mediumReliability > 0 ? "MEDIUM" : sourceSummary.lowReliability > 0 ? "LOW" : "NONE",
+      avgScore: sourceSummary.avgScore,
+      avgCopyabilityScore: sourceSummary.avgCopyabilityScore,
+      avgShadowImpact: sourceSummary.avgShadowImpact
+    },
+    recentSignals: recentSignals.map((signal) => ({
+      ...publicSignal(signal),
+      market: markets.get(signal.marketId) ?? signal.marketId
+    }))
+  };
+}
