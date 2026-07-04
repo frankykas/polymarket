@@ -129,11 +129,33 @@ export interface PublicTrackerReadModel {
   mode: "PAPER";
   capital: DashboardReadModel["capital"];
   performance: DashboardReadModel["performance"];
+  operations: {
+    openPositionCount: number;
+    openExposure: number;
+    openValue: number;
+    unrealizedPnl: number;
+    avgOpenRoi: number;
+    lastActivityAt?: number;
+    lastScanAt?: number;
+  };
   tradeLedger: DashboardReadModel["tradeLedger"];
   positions: DashboardReadModel["positions"];
   closedPositions: DashboardReadModel["closedPositions"];
   sourceSummary: DashboardReadModel["sourceSummary"];
   recentSignals: DashboardReadModel["signals"];
+  agents: Array<{
+    name: AgentEvent["agent"];
+    state: "ACTIVE" | "QUIET" | "WAITING";
+    message: string;
+    updatedAt?: number;
+  }>;
+  activity: Array<{
+    type: "AGENT" | "LOG";
+    agent?: AgentEvent["agent"];
+    level?: "INFO" | "WARN" | "ERROR";
+    message: string;
+    createdAt: number;
+  }>;
 }
 
 export function buildDashboardReadModel(
@@ -295,11 +317,14 @@ export function buildPublicTrackerReadModel(
     mode: "PAPER",
     capital: dashboard.capital,
     performance: dashboard.performance,
+    operations: buildOperations(dashboard.positions, dashboard.performance, dashboard.events, dashboard.logs),
     tradeLedger: dashboard.tradeLedger.slice(0, 30),
     positions: dashboard.positions.slice(0, 20),
     closedPositions: dashboard.closedPositions.slice(0, 20),
     sourceSummary: dashboard.sourceSummary,
-    recentSignals: dashboard.signals.slice(0, 12)
+    recentSignals: dashboard.signals.slice(0, 12),
+    agents: buildAgentStatus(dashboard.events),
+    activity: buildActivity(dashboard.events, dashboard.logs)
   };
 }
 
@@ -315,6 +340,12 @@ export function buildPublicTrackerReadModelFromDb(
   const openPositions = db.getOpenPositions();
   const closedPositionRows = db.getClosedPositions(20);
   const recentSignals = db.getRecentSignals(12);
+  const recentEvents = publicAgentEvents(db.getRecentAgentEvents(30, "PUBLIC"));
+  const recentLogs = db.getRecentBotLogs(20).map((log) => ({
+    level: log.level,
+    message: log.message,
+    createdAt: log.createdAt
+  }));
   const performance = publicPerformance(db.getPerformanceReport());
   const marketIds = [
     ...openPositions.map((position) => position.marketId),
@@ -338,6 +369,25 @@ export function buildPublicTrackerReadModelFromDb(
       equity: input.bankroll + performance.totalPnl
     },
     performance,
+    operations: buildOperations(
+      openPositions.map((position) => ({
+        id: position.id,
+        profile: position.profile,
+        marketId: position.marketId,
+        market: markets.get(position.marketId) ?? position.marketId,
+        outcome: position.outcome,
+        size: position.size,
+        entryCost: position.avgEntryPrice * position.size,
+        currentValue: position.currentPrice * position.size,
+        avgEntryPrice: position.avgEntryPrice,
+        currentPrice: position.currentPrice,
+        unrealizedPnl: (position.currentPrice - position.avgEntryPrice) * position.size,
+        openedAt: position.openedAt
+      })),
+      performance,
+      recentEvents,
+      recentLogs
+    ),
     tradeLedger: db.getPaperTradeLedger(input.bankroll, 30),
     positions: openPositions.slice(0, 20).map((position) => ({
       id: position.id,
@@ -378,8 +428,71 @@ export function buildPublicTrackerReadModelFromDb(
     recentSignals: recentSignals.map((signal) => ({
       ...publicSignal(signal),
       market: markets.get(signal.marketId) ?? signal.marketId
-    }))
+    })),
+    agents: buildAgentStatus(recentEvents),
+    activity: buildActivity(recentEvents, recentLogs)
   };
+}
+
+function buildOperations(
+  positions: DashboardReadModel["positions"],
+  performance: PerformanceReport,
+  events: AgentEvent[],
+  logs: Array<{ level: "INFO" | "WARN" | "ERROR"; message: string; createdAt: number }>
+): PublicTrackerReadModel["operations"] {
+  const openExposure = positions.reduce((sum, position) => sum + position.entryCost, 0);
+  const openValue = positions.reduce((sum, position) => sum + position.currentValue, 0);
+  const unrealizedPnl = positions.reduce((sum, position) => sum + position.unrealizedPnl, 0);
+  const lastActivityAt = Math.max(0, ...events.map((event) => event.createdAt), ...logs.map((log) => log.createdAt)) || undefined;
+  const lastScanAt = Math.max(
+    0,
+    ...events.filter((event) => /scan|cycle|market/i.test(event.message + " " + event.type)).map((event) => event.createdAt),
+    ...logs.filter((log) => /cycle|scan/i.test(log.message)).map((log) => log.createdAt)
+  ) || undefined;
+  return {
+    openPositionCount: positions.length,
+    openExposure: openExposure || performance.openCost,
+    openValue: openValue || performance.openValue,
+    unrealizedPnl: unrealizedPnl || performance.unrealizedPnl,
+    avgOpenRoi: openExposure > 0 ? unrealizedPnl / openExposure : 0,
+    lastActivityAt,
+    lastScanAt
+  };
+}
+
+function buildAgentStatus(events: AgentEvent[]): PublicTrackerReadModel["agents"] {
+  const agents: AgentEvent["agent"][] = ["Signal Agent", "Risk Mitigation Agent", "Overseer Agent"];
+  const now = Date.now();
+  return agents.map((agent) => {
+    const event = events.find((candidate) => candidate.agent === agent);
+    const ageMs = event ? now - event.createdAt : Infinity;
+    return {
+      name: agent,
+      state: !event ? "WAITING" : ageMs < 2 * 60_000 ? "ACTIVE" : "QUIET",
+      message: event?.message ?? "Waiting for the next public update.",
+      updatedAt: event?.createdAt
+    };
+  });
+}
+
+function buildActivity(
+  events: AgentEvent[],
+  logs: Array<{ level: "INFO" | "WARN" | "ERROR"; message: string; createdAt: number }>
+): PublicTrackerReadModel["activity"] {
+  return [
+    ...events.map((event) => ({
+      type: "AGENT" as const,
+      agent: event.agent,
+      message: event.message,
+      createdAt: event.createdAt
+    })),
+    ...logs.map((log) => ({
+      type: "LOG" as const,
+      level: log.level,
+      message: log.message,
+      createdAt: log.createdAt
+    }))
+  ].sort((a, b) => b.createdAt - a.createdAt).slice(0, 24);
 }
 
 function publicClosedPositionAttribution(db: BotDatabase, position: { marketId: string; tokenId: string; profile?: string }): {

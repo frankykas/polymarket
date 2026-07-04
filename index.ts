@@ -136,6 +136,13 @@ class PolymarketPaperBot {
     const result: CycleResult = { markets: [], scores: [], discovered: 0, discoveryTrades: 0, signals: 0, approved: 0, rejected: 0 };
     try {
       this.db.log("INFO", "cycle started", { placePaperOrders: options.placePaperOrders });
+      this.events.write({
+        type: "agent.cycle_started",
+        agent: "Signal Agent",
+        visibility: "PUBLIC",
+        message: "Signal Agent started a market scan and source refresh.",
+        payload: { placePaperOrders: options.placePaperOrders }
+      });
       const signalState = await this.signalAgent.discoverAndScore(this.wallets);
       result.markets = signalState.markets;
       result.discoveryTrades = signalState.discoveryTrades;
@@ -159,6 +166,13 @@ class PolymarketPaperBot {
         }
       });
       const rejectedReasons = new Map<string, number>();
+      this.events.write({
+        type: "agent.review_started",
+        agent: "Risk Mitigation Agent",
+        visibility: "PUBLIC",
+        message: `Risk Agent started reviewing candidates across ${signalState.markets.length} market(s).`,
+        payload: { markets: signalState.markets.length }
+      });
 
       for (const market of signalState.markets) {
         const books = await this.getBooksForMarket(market);

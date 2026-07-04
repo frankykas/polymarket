@@ -20,6 +20,7 @@ export function trackerHtml(): string {
       --blue: #39a8ff;
       --teal: #20d4c4;
       --purple: #a78bfa;
+      --panel-soft: rgba(7, 17, 31, .58);
     }
     * { box-sizing: border-box; }
     body {
@@ -49,13 +50,29 @@ export function trackerHtml(): string {
     .wallet-box { border: 1px solid rgba(255,255,255,.18); background: rgba(8, 19, 33, .82); border-radius: 8px; padding: 18px; }
     .wallet-box span, .metric span, th { color: var(--muted); font-size: 12px; text-transform: uppercase; font-weight: 800; }
     .wallet { margin-top: 10px; overflow-wrap: anywhere; font-family: Consolas, monospace; font-size: 15px; color: #dff7ff; }
-    main { padding: 24px 28px 42px; max-width: 1220px; margin: 0 auto; }
+    main { padding: 24px 28px 42px; max-width: 1260px; margin: 0 auto; }
     .grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 18px; }
     .metric, .panel { border: 1px solid var(--line); background: rgba(13, 24, 40, .94); border-radius: 8px; }
     .metric { padding: 16px; min-width: 0; }
     .metric strong { display: block; margin-top: 8px; font-size: clamp(22px, 3vw, 34px); overflow-wrap: anywhere; }
     .metric small { display: block; margin-top: 6px; color: var(--muted); line-height: 1.35; }
-    .two { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(320px, .75fr); gap: 18px; align-items: start; }
+    .now-strip {
+      display: grid;
+      grid-template-columns: minmax(0, 1.1fr) repeat(3, minmax(150px, .55fr));
+      gap: 12px;
+      margin-bottom: 18px;
+    }
+    .now-card {
+      min-width: 0;
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(13, 24, 40, .94);
+    }
+    .now-card span { color: var(--muted); font-size: 12px; text-transform: uppercase; font-weight: 800; }
+    .now-card strong { display: block; margin-top: 8px; font-size: clamp(24px, 3vw, 42px); line-height: 1.05; }
+    .now-card small { display: block; margin-top: 8px; color: var(--muted); line-height: 1.35; }
+    .two { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(360px, .75fr); gap: 18px; align-items: start; }
     .panel { padding: 18px; margin-bottom: 18px; }
     .panel-head { display: flex; justify-content: space-between; gap: 14px; align-items: start; margin-bottom: 12px; }
     .closed-summary {
@@ -92,6 +109,42 @@ export function trackerHtml(): string {
     }
     .stat-row:last-child { border-bottom: 0; }
     .stat-row strong { font-size: 15px; white-space: nowrap; }
+    .position-cards { display: grid; gap: 10px; }
+    .position-card {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 132px;
+      gap: 12px;
+      padding: 14px;
+      border: 1px solid rgba(35, 64, 93, .8);
+      border-radius: 8px;
+      background: rgba(7, 17, 31, .64);
+    }
+    .position-title { font-weight: 900; font-size: 17px; line-height: 1.25; }
+    .position-meta { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 8px; color: var(--muted); font-size: 12px; }
+    .position-money { display: grid; gap: 8px; text-align: right; align-content: center; }
+    .position-money strong { font-size: 20px; }
+    .agent-grid { display: grid; gap: 10px; }
+    .agent-card {
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel-soft);
+    }
+    .agent-top { display: flex; justify-content: space-between; gap: 10px; align-items: center; margin-bottom: 7px; }
+    .agent-name { font-weight: 900; }
+    .state { font-size: 11px; font-weight: 900; color: var(--muted); text-transform: uppercase; }
+    .state.ACTIVE { color: var(--green); }
+    .state.QUIET { color: var(--amber); }
+    .agent-message { color: #c6d7e8; font-size: 13px; line-height: 1.45; }
+    .activity-feed { display: grid; gap: 8px; max-height: 440px; overflow: auto; padding-right: 2px; }
+    .activity-item {
+      border-left: 3px solid var(--blue);
+      background: var(--panel-soft);
+      border-radius: 8px;
+      padding: 10px 11px;
+    }
+    .activity-item.LOG { border-left-color: var(--purple); }
+    .activity-line { margin-top: 5px; color: #d8e8f8; font-size: 13px; line-height: 1.4; }
     h2 { margin: 0 0 4px; font-size: 21px; }
     p { margin: 0; color: var(--muted); }
     .table-wrap { overflow-x: auto; }
@@ -111,7 +164,8 @@ export function trackerHtml(): string {
     footer { max-width: 1220px; margin: 0 auto; padding: 0 28px 28px; color: var(--muted); font-size: 13px; }
     @media (max-width: 980px) {
       header { min-height: 66vh; }
-      .hero, .two, .grid, .closed-summary { grid-template-columns: 1fr; }
+      .hero, .two, .grid, .now-strip, .closed-summary, .position-card { grid-template-columns: 1fr; }
+      .position-money { text-align: left; grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .nav { position: static; margin-bottom: 80px; }
     }
     @media (max-width: 620px) {
@@ -139,6 +193,7 @@ export function trackerHtml(): string {
       </div>
     </header>
     <main>
+      <section class="now-strip" id="nowStrip"></section>
       <section class="grid" id="metrics"></section>
       <section class="two">
         <div>
@@ -147,11 +202,20 @@ export function trackerHtml(): string {
             <div class="trade-feed" id="tradeFeed"></div>
           </section>
           <section class="panel">
-            <div class="panel-head"><div><h2>Open Positions</h2><p>Current paper positions marked from latest available prices.</p></div></div>
+            <div class="panel-head"><div><h2>Open Positions</h2><p>Markets currently open, paper cost, current value, and live unrealised PNL.</p></div></div>
+            <div class="position-cards" id="openCards"></div>
             <div class="table-wrap"><table><thead><tr><th>Market</th><th>Outcome</th><th>Profile</th><th>Cost</th><th>Value</th><th>uPNL</th></tr></thead><tbody id="positions"></tbody></table></div>
           </section>
         </div>
         <div>
+          <section class="panel">
+            <div class="panel-head"><div><h2>Agent Telemetry</h2><p>Latest public handoffs from the three-agent loop.</p></div><span class="badge">Live</span></div>
+            <div class="agent-grid" id="agents"></div>
+          </section>
+          <section class="panel">
+            <div class="panel-head"><div><h2>Live Bot Log</h2><p>Recent scan, risk, and position-management activity.</p></div></div>
+            <div class="activity-feed" id="activity"></div>
+          </section>
           <section class="panel">
             <div class="panel-head"><div><h2>Recent Signals</h2><p>Source-aligned candidates sent through risk.</p></div></div>
             <div class="table-wrap"><table><thead><tr><th>Market</th><th>Outcome</th><th>Confidence</th><th>State</th></tr></thead><tbody id="signals"></tbody></table></div>
@@ -186,12 +250,26 @@ export function trackerHtml(): string {
       document.getElementById("walletAddress").textContent = data.walletAddress || "Set PUBLIC_TRACKER_WALLET_ADDRESS in .env";
       document.getElementById("disclosure").textContent = data.disclosure;
       renderMetrics(data);
+      renderNow(data);
       renderTrades(data.tradeLedger || []);
       renderPositions(data.positions || []);
+      renderOpenCards(data.positions || []);
       renderSignals(data.recentSignals || []);
       renderClosed(data.closedPositions || []);
       renderClosedMetrics(data.closedPositions || [], data.performance || {});
+      renderAgents(data.agents || []);
+      renderActivity(data.activity || []);
       tick();
+    }
+
+    function renderNow(data) {
+      const ops = data.operations || {};
+      cards("nowStrip", [
+        ["Open Trades", String(ops.openPositionCount || 0), (ops.openPositionCount || 0) ? "Currently deployed in live paper markets" : "No active paper exposure"],
+        ["Money In", fmtUsd.format(ops.openExposure || 0), "paper cost basis"],
+        ["Current Value", fmtUsd.format(ops.openValue || 0), "marked from latest prices"],
+        ["Sitting PNL", money(ops.unrealizedPnl || 0), tonePct(ops.avgOpenRoi || 0) + " open ROI"]
+      ], "now-card");
     }
 
     function renderMetrics(data) {
@@ -229,6 +307,26 @@ export function trackerHtml(): string {
         fmtUsd.format(item.currentValue),
         money(item.unrealizedPnl)
       ]), "No open paper positions.");
+    }
+
+    function renderOpenCards(items) {
+      const root = document.getElementById("openCards");
+      if (!items.length) return empty(root, "No open paper trades right now.");
+      root.replaceChildren(...items.slice(0, 8).map((item) => {
+        const card = el("article", "position-card");
+        const left = el("div");
+        left.append(
+          el("div", "position-title", short(item.market, 92)),
+          metaLine([item.outcome, item.profile || "Shared", "opened " + age(item.openedAt)])
+        );
+        const right = el("div", "position-money");
+        right.append(
+          miniMoney("Invested", fmtUsd.format(item.entryCost || 0)),
+          miniMoney("uPNL", money(item.unrealizedPnl || 0), item.unrealizedPnl)
+        );
+        card.append(left, right);
+        return card;
+      }));
     }
 
     function renderSignals(items) {
@@ -278,9 +376,34 @@ export function trackerHtml(): string {
       root.replaceChildren(pnl, stats);
     }
 
-    function cards(id, items) {
+    function renderAgents(items) {
+      const root = document.getElementById("agents");
+      if (!items.length) return empty(root, "No agent handoffs recorded yet.");
+      root.replaceChildren(...items.map((item) => {
+        const card = el("article", "agent-card");
+        const top = el("div", "agent-top");
+        top.append(el("div", "agent-name", item.name), el("div", "state " + item.state, item.state));
+        card.append(top, el("div", "agent-message", item.message), metaLine([item.updatedAt ? age(item.updatedAt) : "waiting"]));
+        return card;
+      }));
+    }
+
+    function renderActivity(items) {
+      const root = document.getElementById("activity");
+      if (!items.length) return empty(root, "No live activity yet.");
+      root.replaceChildren(...items.slice(0, 18).map((item) => {
+        const node = el("article", "activity-item " + item.type);
+        node.append(
+          meta(item.agent || item.level || item.type, age(item.createdAt)),
+          el("div", "activity-line", item.message)
+        );
+        return node;
+      }));
+    }
+
+    function cards(id, items, className = "metric") {
       document.getElementById(id).replaceChildren(...items.map(([label, value, note]) => {
-        const node = el("article", "metric");
+        const node = el("article", className);
         node.append(el("span", "", label), el("strong", "", value), el("small", "", note));
         return node;
       }));
@@ -318,9 +441,9 @@ export function trackerHtml(): string {
       return sign + fmtPct.format(value || 0);
     }
 
-    function short(value) {
+    function short(value, length = 58) {
       const text = String(value || "Unknown");
-      return text.length > 58 ? text.slice(0, 55) + "..." : text;
+      return text.length > length ? text.slice(0, Math.max(0, length - 3)) + "..." : text;
     }
 
     function empty(root, message) {
@@ -337,6 +460,29 @@ export function trackerHtml(): string {
       const row = el("div", "stat-row");
       row.append(el("span", "", label), el("strong", String(value).includes("-") ? "negative" : String(value).startsWith("+") ? "positive" : "", value));
       return row;
+    }
+
+    function metaLine(parts) {
+      const node = el("div", "position-meta");
+      parts.forEach((part) => node.append(el("span", "", part)));
+      return node;
+    }
+
+    function miniMoney(label, value, raw = 0) {
+      const node = el("div");
+      node.append(el("span", "", label), el("strong", raw < 0 ? "negative" : raw > 0 ? "positive" : "", value));
+      return node;
+    }
+
+    function age(timestamp) {
+      if (!timestamp) return "unknown";
+      const seconds = Math.max(0, Math.floor((Date.now() - timestamp) / 1000));
+      if (seconds < 60) return seconds + "s ago";
+      const minutes = Math.floor(seconds / 60);
+      if (minutes < 60) return minutes + "m ago";
+      const hours = Math.floor(minutes / 60);
+      if (hours < 24) return hours + "h ago";
+      return Math.floor(hours / 24) + "d ago";
     }
 
     function tick() {
