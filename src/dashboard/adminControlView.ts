@@ -154,6 +154,9 @@ export function adminControlHtml(): string {
           <div class="status-list">
             <div class="status-item"><strong>Bot</strong><span class="pill" id="bot-status">unknown</span></div>
             <div class="status-item"><strong>Dashboard</strong><span class="pill" id="dashboard-status">unknown</span></div>
+            <div class="status-item"><strong>Disk</strong><span class="pill" id="disk-status">unknown</span></div>
+            <div class="status-item"><strong>Database</strong><span class="pill" id="db-status">unknown</span></div>
+            <div class="status-item"><strong>Last Bot Log</strong><span class="pill" id="last-log">unknown</span></div>
             <div class="status-item"><strong>Updated</strong><span class="pill" id="updated-at">never</span></div>
           </div>
           <div class="button-grid">
@@ -163,6 +166,7 @@ export function adminControlHtml(): string {
             <button class="amber" data-action="restart-dashboard">Restart dashboard</button>
             <button class="primary" data-action="scan">Run scan safely</button>
             <button data-action="performance">Run performance</button>
+            <button data-action="cleanup">Run cleanup service</button>
           </div>
         </div>
       </div>
@@ -187,6 +191,9 @@ export function adminControlHtml(): string {
     const statusEls = {
       bot: document.getElementById("bot-status"),
       dashboard: document.getElementById("dashboard-status"),
+      disk: document.getElementById("disk-status"),
+      db: document.getElementById("db-status"),
+      lastLog: document.getElementById("last-log"),
       updated: document.getElementById("updated-at")
     };
     const saved = new URLSearchParams(location.search).get("token") || localStorage.getItem("stratifi_admin_token") || "";
@@ -227,6 +234,9 @@ export function adminControlHtml(): string {
       const body = await requestJson("/api/admin/control/status");
       setStatus(statusEls.bot, body.bot);
       setStatus(statusEls.dashboard, body.dashboard);
+      statusEls.disk.textContent = body.disk || "unknown";
+      statusEls.db.textContent = body.database || "unknown";
+      statusEls.lastLog.textContent = body.lastBotLogAt ? new Date(body.lastBotLogAt).toLocaleString() : "none";
       statusEls.updated.textContent = new Date(body.generatedAt).toLocaleString();
       return body;
     }

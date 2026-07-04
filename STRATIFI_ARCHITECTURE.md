@@ -175,7 +175,20 @@ The Risk Mitigation Agent protects against two forms of bad timing:
 
 ## Next Build Phases
 
-1. Add deeper dashboard charts for category shadow-copy drift, order health trends, and per-agent throughput.
-2. Strengthen realized paper attribution as more closed paper positions accumulate.
-3. Broaden resolved-market reconciliation for provider payloads that omit winners.
-4. Add live-trading interfaces only after paper trading has enough forward performance data.
+1. Keep dashboard/tracker endpoints bounded and fast under long-running VPS data.
+2. Rebuild clean forward paper-performance data from a compact SQLite store.
+3. Strengthen realized paper attribution by category, source count, confidence, and strategy profile.
+4. Add admin reliability controls for service health, disk usage, DB size, cleanup, and last scan activity.
+5. Broaden resolved-market reconciliation for provider payloads that omit winners.
+6. Add live-trading interfaces only after paper trading has enough forward performance data.
+
+## Live Trading Gate
+
+Live trading remains out of scope until the paper system can prove stable forward performance. Before any live execution interface is added, StratiFi should have:
+
+- at least 30 days of uninterrupted paper operation
+- daily cleanup and disk monitoring running automatically
+- positive realized paper PnL after fees/slippage assumptions
+- source/category attribution showing which signals actually make or lose money
+- documented max loss, exposure, and emergency-stop behavior
+- a separate implementation review confirming no private keys or live-order paths can be reached accidentally

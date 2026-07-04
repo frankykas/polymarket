@@ -800,6 +800,46 @@ export class BotDatabase {
     return rows.map(rowToPosition);
   }
 
+  getPaperPositionAttribution(marketId: string, tokenId: string, profile?: string): {
+    sourceCount: number;
+    confidence?: number;
+    category?: string;
+  } | undefined {
+    const row = this.db.prepare(`
+      SELECT
+        s.aligned_wallets_json,
+        s.confidence,
+        m.question,
+        m.raw_json
+      FROM paper_orders po
+      JOIN signals s ON s.id = po.signal_id
+      LEFT JOIN markets m ON m.id = po.market_id OR m.condition_id = po.market_id
+      WHERE po.market_id = ?
+        AND po.token_id = ?
+        AND COALESCE(po.profile, 'Shared') = COALESCE(?, 'Shared')
+      ORDER BY po.created_at DESC
+      LIMIT 1
+    `).get(marketId, tokenId, profile ?? null) as {
+      aligned_wallets_json: string;
+      confidence: number;
+      question: string | null;
+      raw_json: string | null;
+    } | undefined;
+    if (!row) return undefined;
+    let sourceCount = 0;
+    try {
+      const wallets = JSON.parse(row.aligned_wallets_json) as unknown;
+      sourceCount = Array.isArray(wallets) ? wallets.length : 0;
+    } catch {
+      sourceCount = 0;
+    }
+    return {
+      sourceCount,
+      confidence: Number(row.confidence ?? 0),
+      category: marketCategoryFromText(row.question, row.raw_json)
+    };
+  }
+
   getPerformanceReport(): PerformanceReport {
     const openRow = this.db.prepare(`
       SELECT

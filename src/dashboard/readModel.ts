@@ -88,6 +88,9 @@ export interface DashboardReadModel {
     realizedPnl: number;
     returnPct: number;
     updatedAt: number;
+    sourceCount: number;
+    signalConfidence?: number;
+    category?: string;
   }>;
   events: AgentEvent[];
   logs: Array<{ level: "INFO" | "WARN" | "ERROR"; message: string; createdAt: number }>;
@@ -166,6 +169,7 @@ export function buildDashboardReadModel(
     openedAt: position.openedAt
   }));
   const closedPositions = closedPositionRows.map((position) => ({
+    ...publicClosedPositionAttribution(db, position),
     id: position.id,
     profile: position.profile,
     marketId: position.marketId,
@@ -350,6 +354,7 @@ export function buildPublicTrackerReadModelFromDb(
       openedAt: position.openedAt
     })),
     closedPositions: closedPositionRows.map((position) => ({
+      ...publicClosedPositionAttribution(db, position),
       id: position.id,
       profile: position.profile,
       marketId: position.marketId,
@@ -374,5 +379,18 @@ export function buildPublicTrackerReadModelFromDb(
       ...publicSignal(signal),
       market: markets.get(signal.marketId) ?? signal.marketId
     }))
+  };
+}
+
+function publicClosedPositionAttribution(db: BotDatabase, position: { marketId: string; tokenId: string; profile?: string }): {
+  sourceCount: number;
+  signalConfidence?: number;
+  category?: string;
+} {
+  const attribution = db.getPaperPositionAttribution(position.marketId, position.tokenId, position.profile);
+  return {
+    sourceCount: attribution?.sourceCount ?? 0,
+    signalConfidence: attribution?.confidence,
+    category: attribution?.category
   };
 }

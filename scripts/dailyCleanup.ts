@@ -47,7 +47,17 @@ const generatedFilePatterns = [
   /\.bak$/
 ];
 
-main();
+try {
+  main();
+} catch (error) {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/database is locked/i.test(message)) {
+    console.error("Cleanup could not acquire the SQLite write lock.");
+    console.error("Stop pmarke-bot first, or run: systemctl start pmarke-cleanup.service");
+    process.exit(2);
+  }
+  throw error;
+}
 
 function main(): void {
   console.log(`StratiFi daily cleanup (${options.apply ? "apply" : "dry-run"})`);

@@ -159,7 +159,7 @@ export function trackerHtml(): string {
           <section class="panel">
             <div class="panel-head"><div><h2>Closed Trades</h2><p>Realised paper outcomes with entry cost, exit value, and net PNL.</p></div></div>
             <section class="closed-summary" id="closedMetrics"></section>
-            <div class="table-wrap"><table><thead><tr><th>Market</th><th>Outcome</th><th>Profile</th><th>Entry Cost</th><th>Exit Value</th><th>PNL</th><th>ROI</th></tr></thead><tbody id="closed"></tbody></table></div>
+            <div class="table-wrap"><table><thead><tr><th>Market</th><th>Category</th><th>Outcome</th><th>Sources</th><th>Confidence</th><th>Entry</th><th>Exit</th><th>PNL</th><th>ROI</th></tr></thead><tbody id="closed"></tbody></table></div>
           </section>
         </div>
       </section>
@@ -243,8 +243,10 @@ export function trackerHtml(): string {
     function renderClosed(items) {
       rows("closed", items.map((item) => [
         short(item.market),
+        item.category || "other",
         item.outcome,
-        item.profile || "Shared",
+        String(item.sourceCount || 0),
+        item.signalConfidence !== undefined ? String(item.signalConfidence) : "-",
         fmtUsd.format(item.entryCost || 0),
         fmtUsd.format(item.exitValue || 0),
         money(item.realizedPnl),

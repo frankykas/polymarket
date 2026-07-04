@@ -1,5 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { execFile } from "node:child_process";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -165,12 +165,21 @@ function cachedDashboard(build: () => DashboardReadModel): DashboardReadModel {
   return value;
 }
 
-async function getServiceStatus(): Promise<{ bot: string; dashboard: string; generatedAt: number }> {
-  const [bot, dashboard] = await Promise.all([
+async function getServiceStatus(): Promise<{ bot: string; dashboard: string; disk: string; database: string; lastBotLogAt?: number; generatedAt: number }> {
+  const [bot, dashboard, disk] = await Promise.all([
     serviceState("pmarke-bot"),
-    serviceState("pmarke-dashboard")
+    serviceState("pmarke-dashboard"),
+    diskStatus()
   ]);
-  return { bot, dashboard, generatedAt: Date.now() };
+  const lastLog = db.getRecentBotLogs(1)[0];
+  return {
+    bot,
+    dashboard,
+    disk,
+    database: databaseStatus(),
+    lastBotLogAt: lastLog?.createdAt,
+    generatedAt: Date.now()
+  };
 }
 
 async function serviceState(service: string): Promise<string> {
@@ -190,12 +199,42 @@ async function runAdminAction(action: string | undefined): Promise<{ action: str
   if (action === "stop-bot") return runSystemctlAction(action, ["stop", "pmarke-bot"]);
   if (action === "restart-bot") return runSystemctlAction(action, ["restart", "pmarke-bot"]);
   if (action === "restart-dashboard") return runSystemctlAction(action, ["restart", "pmarke-dashboard"]);
+  if (action === "cleanup") return runSystemctlAction(action, ["start", "--no-block", "pmarke-cleanup.service"]);
   if (action === "performance") {
     const result = await runCommand("npm", ["run", "performance"], { timeoutMs: 120000, allowFailure: true });
     return { action, output: commandOutput(result) };
   }
   if (action === "scan") return runSafeScan();
   throw new Error(`Unsupported admin action: ${action}`);
+}
+
+async function diskStatus(): Promise<string> {
+  const result = await runCommand("df", ["-h", process.cwd()], { timeoutMs: 10000, allowFailure: true });
+  const line = result.stdout.trim().split(/\r?\n/)[1];
+  if (!line) return "unknown";
+  const parts = line.trim().split(/\s+/);
+  return parts.length >= 5 ? `${parts[4]} used (${parts[3]} free)` : line.trim();
+}
+
+function databaseStatus(): string {
+  try {
+    const path = env.dbPath;
+    if (!existsSync(path)) return "missing";
+    return formatBytes(statSync(path).size);
+  } catch {
+    return "unknown";
+  }
+}
+
+function formatBytes(bytes: number): string {
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let value = bytes;
+  let index = 0;
+  while (value >= 1024 && index < units.length - 1) {
+    value /= 1024;
+    index += 1;
+  }
+  return `${value.toFixed(index === 0 ? 0 : 1)} ${units[index]}`;
 }
 
 async function runSystemctlAction(action: string, args: string[]): Promise<{ action: string; output: string }> {
