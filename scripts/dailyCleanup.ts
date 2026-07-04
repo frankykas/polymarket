@@ -63,7 +63,6 @@ function main(): void {
   const db = new DatabaseSync(dbPath);
   try {
     db.exec("PRAGMA busy_timeout = 30000");
-    db.exec("PRAGMA journal_mode = DELETE");
     for (const rule of tableRules) cleanupTable(db, rule);
     cleanupGeneratedFiles();
     if (options.apply) {

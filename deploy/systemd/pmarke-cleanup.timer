@@ -1,0 +1,11 @@
+[Unit]
+Description=Run PMarke retention cleanup daily
+
+[Timer]
+OnCalendar=*-*-* 04:15:00
+Persistent=true
+RandomizedDelaySec=10m
+Unit=pmarke-cleanup.service
+
+[Install]
+WantedBy=timers.target

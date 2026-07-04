@@ -53,6 +53,18 @@ systemctl start pmarke-bot
 
 The cleanup preserves current operational state such as tracked wallets, discovered wallet summaries, latest wallet scores, markets, open/closed positions, and config. It prunes bulky history tables such as wallet trades, order-book snapshots, agent/log/risk history, source-score snapshots, shadow simulations, paper fills, and paper orders. Use `npm run cleanup:daily -- --keep-days 2 --keep-rows 5000` to keep more history, and add `-- --vacuum` only when the VPS has enough free disk space for SQLite compaction.
 
+On the VPS, install the daily automatic cleanup timer:
+
+```bash
+cp deploy/systemd/pmarke-cleanup.service /etc/systemd/system/pmarke-cleanup.service
+cp deploy/systemd/pmarke-cleanup.timer /etc/systemd/system/pmarke-cleanup.timer
+systemctl daemon-reload
+systemctl enable --now pmarke-cleanup.timer
+systemctl list-timers pmarke-cleanup.timer
+```
+
+The timer briefly stops the bot and dashboard, applies retention cleanup, then starts both services again.
+
 ## Dashboard
 
 Run:

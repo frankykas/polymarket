@@ -51,7 +51,6 @@ export function trackerHtml(): string {
     .wallet { margin-top: 10px; overflow-wrap: anywhere; font-family: Consolas, monospace; font-size: 15px; color: #dff7ff; }
     main { padding: 24px 28px 42px; max-width: 1220px; margin: 0 auto; }
     .grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 18px; }
-    .closed-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 14px; }
     .metric, .panel { border: 1px solid var(--line); background: rgba(13, 24, 40, .94); border-radius: 8px; }
     .metric { padding: 16px; min-width: 0; }
     .metric strong { display: block; margin-top: 8px; font-size: clamp(22px, 3vw, 34px); overflow-wrap: anywhere; }
@@ -59,6 +58,40 @@ export function trackerHtml(): string {
     .two { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(320px, .75fr); gap: 18px; align-items: start; }
     .panel { padding: 18px; margin-bottom: 18px; }
     .panel-head { display: flex; justify-content: space-between; gap: 14px; align-items: start; margin-bottom: 12px; }
+    .closed-summary {
+      display: grid;
+      grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+    .pnl-card, .stat-stack {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(7, 17, 31, .58);
+      min-width: 0;
+    }
+    .pnl-card { padding: 16px; }
+    .pnl-card span, .stat-row span { color: var(--muted); font-size: 12px; text-transform: uppercase; font-weight: 800; }
+    .pnl-card strong {
+      display: block;
+      margin-top: 8px;
+      font-size: 30px;
+      line-height: 1.05;
+      white-space: nowrap;
+    }
+    .pnl-card small { display: block; margin-top: 8px; color: var(--muted); }
+    .stat-stack { display: grid; }
+    .stat-row {
+      min-width: 0;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 11px 12px;
+      border-bottom: 1px solid var(--line);
+    }
+    .stat-row:last-child { border-bottom: 0; }
+    .stat-row strong { font-size: 15px; white-space: nowrap; }
     h2 { margin: 0 0 4px; font-size: 21px; }
     p { margin: 0; color: var(--muted); }
     .table-wrap { overflow-x: auto; }
@@ -78,7 +111,7 @@ export function trackerHtml(): string {
     footer { max-width: 1220px; margin: 0 auto; padding: 0 28px 28px; color: var(--muted); font-size: 13px; }
     @media (max-width: 980px) {
       header { min-height: 66vh; }
-      .hero, .two, .grid, .closed-grid { grid-template-columns: 1fr; }
+      .hero, .two, .grid, .closed-summary { grid-template-columns: 1fr; }
       .nav { position: static; margin-bottom: 80px; }
     }
     @media (max-width: 620px) {
@@ -125,7 +158,7 @@ export function trackerHtml(): string {
           </section>
           <section class="panel">
             <div class="panel-head"><div><h2>Closed Trades</h2><p>Realised paper outcomes with entry cost, exit value, and net PNL.</p></div></div>
-            <section class="closed-grid" id="closedMetrics"></section>
+            <section class="closed-summary" id="closedMetrics"></section>
             <div class="table-wrap"><table><thead><tr><th>Market</th><th>Outcome</th><th>Profile</th><th>Entry Cost</th><th>Exit Value</th><th>PNL</th><th>ROI</th></tr></thead><tbody id="closed"></tbody></table></div>
           </section>
         </div>
@@ -134,7 +167,7 @@ export function trackerHtml(): string {
     <footer id="disclosure">Paper trading tracker. No live Polymarket orders are placed by this bot.</footer>
   </div>
   <script>
-    const fmtUsd = new Intl.NumberFormat(undefined, { style: "currency", currency: "USD", maximumFractionDigits: 2 });
+    const fmtUsd = new Intl.NumberFormat(undefined, { style: "currency", currency: "USD", currencyDisplay: "narrowSymbol", maximumFractionDigits: 2 });
     const fmtPct = new Intl.NumberFormat(undefined, { style: "percent", maximumFractionDigits: 1 });
     const fmtNum = new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 });
     let lastGeneratedAt = Date.now();
@@ -226,12 +259,21 @@ export function trackerHtml(): string {
       const avgRoi = items.length ? items.reduce((sum, item) => sum + (item.returnPct || 0), 0) / items.length : 0;
       const best = items.reduce((current, item) => Math.max(current, item.realizedPnl || 0), 0);
       const worst = items.reduce((current, item) => Math.min(current, item.realizedPnl || 0), 0);
-      cards("closedMetrics", [
-        ["Realised PNL", money(realized), wins + " wins / " + losses + " losses"],
-        ["Closed Trades", String(performance.closedPositions || items.length || 0), fmtPct.format(performance.winRate || 0) + " win rate"],
-        ["Average ROI", tonePct(avgRoi), "recent closed markets"],
-        ["Best / Worst", money(best) + " / " + money(worst), "recent closed PNL"]
-      ]);
+      const root = document.getElementById("closedMetrics");
+      const pnl = el("article", "pnl-card");
+      pnl.append(
+        el("span", "", "Realised PNL"),
+        el("strong", realized < 0 ? "negative" : realized > 0 ? "positive" : "", money(realized)),
+        el("small", "", wins + " wins / " + losses + " losses")
+      );
+      const stats = el("article", "stat-stack");
+      stats.append(
+        statRow("Closed trades", String(performance.closedPositions || items.length || 0)),
+        statRow("Win rate", fmtPct.format(performance.winRate || 0)),
+        statRow("Average ROI", tonePct(avgRoi)),
+        statRow("Best / worst", money(best) + " / " + money(worst))
+      );
+      root.replaceChildren(pnl, stats);
     }
 
     function cards(id, items) {
@@ -287,6 +329,12 @@ export function trackerHtml(): string {
       const top = el("div", "trade-top");
       top.append(el("span", "", left), el("span", "", right));
       return top;
+    }
+
+    function statRow(label, value) {
+      const row = el("div", "stat-row");
+      row.append(el("span", "", label), el("strong", String(value).includes("-") ? "negative" : String(value).startsWith("+") ? "positive" : "", value));
+      return row;
     }
 
     function tick() {
