@@ -1064,17 +1064,23 @@ export class BotDatabase {
 
   getPaperTradeLedger(bankroll: number, limit = 40): PaperTradeLedgerEntry[] {
     const fillRows = this.db.prepare(`
-      SELECT
-        pf.id,
-        po.profile,
-        pf.market_id,
-        po.outcome,
-        pf.price,
-        pf.size,
-        pf.timestamp as created_at
-      FROM paper_fills pf
-      JOIN paper_orders po ON po.id = pf.order_id
-    `).all() as Array<{
+      SELECT *
+      FROM (
+        SELECT
+          pf.id,
+          po.profile,
+          pf.market_id,
+          po.outcome,
+          pf.price,
+          pf.size,
+          pf.timestamp as created_at
+        FROM paper_fills pf
+        JOIN paper_orders po ON po.id = pf.order_id
+        ORDER BY pf.timestamp DESC
+        LIMIT ?
+      )
+      ORDER BY created_at ASC
+    `).all(limit) as Array<{
       id: string;
       profile: Position["profile"] | null;
       market_id: string;
@@ -1085,9 +1091,18 @@ export class BotDatabase {
     }>;
     const closedRows = this.db.prepare(`
       SELECT *
-      FROM positions
-      WHERE status = 'CLOSED'
-    `).all() as unknown as DbPosition[];
+      FROM (
+        SELECT *
+        FROM positions
+        WHERE status = 'CLOSED'
+        ORDER BY updated_at DESC
+        LIMIT ?
+      )
+      ORDER BY updated_at ASC
+    `).all(limit) as unknown as DbPosition[];
+    const performance = this.getPerformanceReport();
+    const totalPnl = performance.totalPnl;
+    const availableCash = bankroll - performance.openCost + performance.realizedPnl;
 
     const events = [
       ...fillRows.map((row) => ({
@@ -1114,30 +1129,15 @@ export class BotDatabase {
         realizedPnl: row.realized_pnl,
         createdAt: row.updated_at
       }))
-    ].sort((a, b) => a.createdAt - b.createdAt);
+    ].sort((a, b) => b.createdAt - a.createdAt).slice(0, limit);
 
-    let deployedCost = 0;
-    let realizedPnl = 0;
-    const ledger: PaperTradeLedgerEntry[] = [];
-    for (const event of events) {
-      if (event.type === "ENTRY") deployedCost += event.notional;
-      else {
-        const cost = event.size * (closedRows.find((row) => row.id === event.id)?.avg_entry_price ?? event.price);
-        deployedCost = Math.max(0, deployedCost - cost);
-        realizedPnl += event.realizedPnl;
-      }
-      const openRows = this.db.prepare("SELECT * FROM positions WHERE status = 'OPEN' AND opened_at <= ?").all(event.createdAt) as unknown as DbPosition[];
-      const unrealizedPnl = openRows.reduce((sum, row) => sum + (row.current_price - row.avg_entry_price) * row.size, 0);
-      const totalPnl = realizedPnl + unrealizedPnl;
-      ledger.push({
-        ...event,
-        unrealizedPnl,
-        totalPnl,
-        equity: bankroll + totalPnl,
-        availableCash: bankroll - deployedCost + realizedPnl
-      });
-    }
-    return ledger.slice(-limit).reverse();
+    return events.map((event) => ({
+      ...event,
+      unrealizedPnl: performance.unrealizedPnl,
+      totalPnl,
+      equity: bankroll + totalPnl,
+      availableCash
+    }));
   }
 
   getShadowCategoryTrend(days = 14): ShadowCategoryTrendPoint[] {
