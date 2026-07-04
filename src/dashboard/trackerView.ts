@@ -19,6 +19,7 @@ export function trackerHtml(): string {
       --amber: #f4b84f;
       --blue: #39a8ff;
       --teal: #20d4c4;
+      --purple: #a78bfa;
     }
     * { box-sizing: border-box; }
     body {
@@ -50,6 +51,7 @@ export function trackerHtml(): string {
     .wallet { margin-top: 10px; overflow-wrap: anywhere; font-family: Consolas, monospace; font-size: 15px; color: #dff7ff; }
     main { padding: 24px 28px 42px; max-width: 1220px; margin: 0 auto; }
     .grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 18px; }
+    .closed-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 14px; }
     .metric, .panel { border: 1px solid var(--line); background: rgba(13, 24, 40, .94); border-radius: 8px; }
     .metric { padding: 16px; min-width: 0; }
     .metric strong { display: block; margin-top: 8px; font-size: clamp(22px, 3vw, 34px); overflow-wrap: anywhere; }
@@ -76,7 +78,7 @@ export function trackerHtml(): string {
     footer { max-width: 1220px; margin: 0 auto; padding: 0 28px 28px; color: var(--muted); font-size: 13px; }
     @media (max-width: 980px) {
       header { min-height: 66vh; }
-      .hero, .two, .grid { grid-template-columns: 1fr; }
+      .hero, .two, .grid, .closed-grid { grid-template-columns: 1fr; }
       .nav { position: static; margin-bottom: 80px; }
     }
     @media (max-width: 620px) {
@@ -122,8 +124,9 @@ export function trackerHtml(): string {
             <div class="table-wrap"><table><thead><tr><th>Market</th><th>Outcome</th><th>Confidence</th><th>State</th></tr></thead><tbody id="signals"></tbody></table></div>
           </section>
           <section class="panel">
-            <div class="panel-head"><div><h2>Closed Trades</h2><p>Realised paper outcomes.</p></div></div>
-            <div class="table-wrap"><table><thead><tr><th>Market</th><th>Outcome</th><th>PNL</th><th>ROI</th></tr></thead><tbody id="closed"></tbody></table></div>
+            <div class="panel-head"><div><h2>Closed Trades</h2><p>Realised paper outcomes with entry cost, exit value, and net PNL.</p></div></div>
+            <section class="closed-grid" id="closedMetrics"></section>
+            <div class="table-wrap"><table><thead><tr><th>Market</th><th>Outcome</th><th>Profile</th><th>Entry Cost</th><th>Exit Value</th><th>PNL</th><th>ROI</th></tr></thead><tbody id="closed"></tbody></table></div>
           </section>
         </div>
       </section>
@@ -154,6 +157,7 @@ export function trackerHtml(): string {
       renderPositions(data.positions || []);
       renderSignals(data.recentSignals || []);
       renderClosed(data.closedPositions || []);
+      renderClosedMetrics(data.closedPositions || [], data.performance || {});
       tick();
     }
 
@@ -207,9 +211,27 @@ export function trackerHtml(): string {
       rows("closed", items.map((item) => [
         short(item.market),
         item.outcome,
+        item.profile || "Shared",
+        fmtUsd.format(item.entryCost || 0),
+        fmtUsd.format(item.exitValue || 0),
         money(item.realizedPnl),
         tonePct(item.returnPct)
       ]), "No closed paper trades.");
+    }
+
+    function renderClosedMetrics(items, performance) {
+      const realized = performance.realizedPnl || items.reduce((sum, item) => sum + (item.realizedPnl || 0), 0);
+      const wins = performance.wins || items.filter((item) => (item.realizedPnl || 0) > 0).length;
+      const losses = performance.losses || items.filter((item) => (item.realizedPnl || 0) < 0).length;
+      const avgRoi = items.length ? items.reduce((sum, item) => sum + (item.returnPct || 0), 0) / items.length : 0;
+      const best = items.reduce((current, item) => Math.max(current, item.realizedPnl || 0), 0);
+      const worst = items.reduce((current, item) => Math.min(current, item.realizedPnl || 0), 0);
+      cards("closedMetrics", [
+        ["Realised PNL", money(realized), wins + " wins / " + losses + " losses"],
+        ["Closed Trades", String(performance.closedPositions || items.length || 0), fmtPct.format(performance.winRate || 0) + " win rate"],
+        ["Average ROI", tonePct(avgRoi), "recent closed markets"],
+        ["Best / Worst", money(best) + " / " + money(worst), "recent closed PNL"]
+      ]);
     }
 
     function cards(id, items) {
