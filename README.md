@@ -29,6 +29,8 @@ npm run dev        # continuous paper bot loop
 npm run dashboard  # local StratiFi web dashboard
 npm run performance # local paper PnL report
 npm run export-ledger # export paper trades to data/paper-trade-ledger.csv
+npm run cleanup:daily:dry # preview safe daily SQLite/generated-file cleanup
+npm run cleanup:daily # prune bulky history while preserving current bot state
 npm run test       # unit tests
 npm run typecheck  # TypeScript checks
 ```
@@ -36,6 +38,20 @@ npm run typecheck  # TypeScript checks
 Run one `npm run dev` loop per SQLite database. Running multiple bot loops against the same `BOT_DB_PATH` can create SQLite write contention. The dashboard can run alongside the bot, but if you see `database is locked`, stop extra bot/dashboard processes and restart one clean bot loop.
 
 Paper trades are persisted in SQLite and also exported to `data/paper-trade-ledger.csv` after paper entries/exits. Rebuild the CSV anytime with `npm run export-ledger`. Override the file path with `PAPER_TRADE_LEDGER_PATH`.
+
+## Daily Cleanup
+
+For long-running VPS deployments, stop the bot before maintenance, preview the cleanup, then apply it:
+
+```bash
+systemctl stop pmarke-bot
+cd /opt/pmarke
+npm run cleanup:daily:dry
+npm run cleanup:daily
+systemctl start pmarke-bot
+```
+
+The cleanup preserves current operational state such as tracked wallets, discovered wallet summaries, latest wallet scores, markets, open/closed positions, and config. It prunes bulky history tables such as wallet trades, order-book snapshots, agent/log/risk history, source-score snapshots, shadow simulations, paper fills, and paper orders. Use `npm run cleanup:daily -- --keep-days 2 --keep-rows 5000` to keep more history, and add `-- --vacuum` only when the VPS has enough free disk space for SQLite compaction.
 
 ## Dashboard
 
