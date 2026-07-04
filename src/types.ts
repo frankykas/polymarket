@@ -1,7 +1,15 @@
 export type Side = "BUY" | "SELL";
 export type OutcomeSide = "YES" | "NO" | string;
 export type TradingMode = "BACKTEST" | "PAPER" | "LIVE" | "SHADOW";
-export type AgentName = "Signal Agent" | "Risk Mitigation Agent" | "Overseer Agent" | "Treasury Simulation";
+export type AgentName =
+  | "Signal Agent"
+  | "Market Intelligence Agent"
+  | "Microstructure Agent"
+  | "Wallet Intelligence Agent"
+  | "Decision Council"
+  | "Risk Mitigation Agent"
+  | "Overseer Agent"
+  | "Treasury Simulation";
 export type EventVisibility = "PUBLIC" | "PRIVATE";
 export type StrategyProfileName = "Conservative" | "Aggressive";
 export type RiskStateLabel = "SAFE" | "WARNING" | "HIGH_RISK";
@@ -163,6 +171,9 @@ export interface MarketQuality {
   approved: boolean;
   score: number;
   reasons: string[];
+  microstructureScore?: number;
+  microstructureState?: MicrostructureReport["state"];
+  microstructureReasons?: string[];
 }
 
 export interface TradeSignal {
@@ -190,9 +201,83 @@ export interface RiskDecision {
   shadow?: boolean;
 }
 
+export interface MarketIntelligenceBrief {
+  id: string;
+  marketId: string;
+  category: MarketCategory;
+  thesis: "BULLISH_SIGNAL" | "WATCH" | "REJECT_CONTEXT" | "NEUTRAL";
+  confidenceModifier: number;
+  contextScore: number;
+  timeToResolutionHours?: number;
+  signalFreshness: "FRESH" | "STALE" | "UNKNOWN";
+  catalystTags: string[];
+  publicSummary: string;
+  privateNotes: string[];
+  createdAt: number;
+}
+
+export interface MicrostructureReport {
+  id: string;
+  marketId: string;
+  score: number;
+  state: "EXECUTABLE" | "THIN" | "WIDE" | "STALE" | "UNKNOWN";
+  bestSpread?: number;
+  worstSpread?: number;
+  totalDepth: number;
+  executableAskDepth: number;
+  priceImpactForMinSize: number;
+  dataAgeMs: number;
+  reasons: string[];
+  createdAt: number;
+}
+
+export interface WalletIntelligenceReport {
+  id: string;
+  signalId: string;
+  marketId: string;
+  state: "INDEPENDENT" | "CLUSTERED" | "WEAK_EVIDENCE" | "UNKNOWN";
+  score: number;
+  alignedWallets: number;
+  independentSourceCount: number;
+  clusterPenalty: number;
+  timingSpreadMs?: number;
+  avgCopyabilityScore: number;
+  avgSampleConfidence: number;
+  confidenceModifier: number;
+  reasons: string[];
+  createdAt: number;
+}
+
+export interface AgentVote {
+  agent: AgentName;
+  vote: "APPROVE" | "WATCH" | "REJECT";
+  score: number;
+  reason: string;
+}
+
+export interface AgentDebateDecision {
+  id: string;
+  signalId: string;
+  marketId: string;
+  outcome: OutcomeSide;
+  votes: AgentVote[];
+  consensus: "APPROVE" | "WATCH" | "REJECT";
+  consensusScore: number;
+  publicSummary: string;
+  createdAt: number;
+}
+
+export interface IntelligenceReviewContext {
+  marketIntelligence?: MarketIntelligenceBrief;
+  microstructure?: MicrostructureReport;
+  walletIntelligence?: WalletIntelligenceReport;
+  debate?: AgentDebateDecision;
+}
+
 export interface PaperOrder {
   id: string;
   signalId: string;
+  profile?: StrategyProfileName;
   marketId: string;
   tokenId: string;
   outcome: OutcomeSide;
@@ -218,6 +303,7 @@ export interface PaperFill {
 
 export interface Position {
   id: string;
+  profile?: StrategyProfileName;
   marketId: string;
   tokenId: string;
   outcome: OutcomeSide;
@@ -239,6 +325,8 @@ export interface ExitDecision {
 export interface PerformanceReport {
   openPositions: number;
   closedPositions: number;
+  openCost: number;
+  openValue: number;
   realizedPnl: number;
   unrealizedPnl: number;
   totalPnl: number;
@@ -249,6 +337,29 @@ export interface PerformanceReport {
   paperFills: number;
   signals: number;
   approvedSignals: number;
+}
+
+export interface ProfilePerformanceReport {
+  profile: StrategyProfileName;
+  bankroll: number;
+  openPositions: number;
+  closedPositions: number;
+  openCost: number;
+  openValue: number;
+  realizedPnl: number;
+  unrealizedPnl: number;
+  totalPnl: number;
+  winRate: number;
+  wins: number;
+  losses: number;
+  paperOrders: number;
+  approvedSignals: number;
+  rejectedSignals: number;
+  openExposure: number;
+  maxDrawdown: number;
+  avgHoldMinutes: number;
+  bestTradeReturnPct?: number;
+  worstTradeReturnPct?: number;
 }
 
 export interface SourceScoreSummary {
@@ -294,9 +405,176 @@ export interface AgentHandoffTrace {
 
 export interface RiskEventSummary {
   decision: RiskDecision["decision"];
+  profile?: StrategyProfileName;
   reason: string;
   count: number;
   latestAt: number;
+}
+
+export interface RecentRiskEvent {
+  id: string;
+  decision: RiskDecision["decision"];
+  profile?: StrategyProfileName;
+  signalId?: string;
+  marketId?: string;
+  outcome?: string;
+  confidence?: number;
+  riskState?: RiskStateLabel;
+  positionSize: number;
+  reason: string;
+  details?: {
+    marketQualityApproved?: boolean;
+    marketQualityScore?: number;
+    marketQualityReasons?: string[];
+    marketIntelligenceScore?: number;
+    marketIntelligenceThesis?: MarketIntelligenceBrief["thesis"];
+    marketIntelligenceSummary?: string;
+    microstructureScore?: number;
+    microstructureState?: MicrostructureReport["state"];
+    microstructureReasons?: string[];
+    walletIntelligenceScore?: number;
+    walletIntelligenceState?: WalletIntelligenceReport["state"];
+    debateConsensus?: AgentDebateDecision["consensus"];
+    debateScore?: number;
+    debateVotes?: AgentVote[];
+    openExposure?: number;
+    dailyPnl?: number;
+    lossStreak?: number;
+    tradesToday?: number;
+  };
+  createdAt: number;
+}
+
+export interface OrderHealthReport {
+  totalOrders: number;
+  filledOrders: number;
+  openOrders: number;
+  expiredOrders: number;
+  cancelledOrders: number;
+  partialOrders: number;
+  fillRate: number;
+  staleOpenOrders: number;
+  dustFilledOrders: number;
+  avgFilledNotional: number;
+  recentFills24h: number;
+}
+
+export interface ExposureHealthReport {
+  maxOpenExposure: number;
+  activeExposureCap: number;
+  openExposure: number;
+  remainingExposure: number;
+  usedPct: number;
+  status: "AVAILABLE" | "NEAR_CAP" | "FULL";
+}
+
+export interface CapitalLockupReport {
+  reserveCashPct: number;
+  reserveCash: number;
+  activeTradingCap: number;
+  maxTimeToResolutionHours: number;
+  longDatedPositions: number;
+  longDatedCapital: number;
+  longestResolutionHours?: number;
+}
+
+export interface PaperSourcePerformance {
+  wallet: string;
+  filledOrders: number;
+  pnl: number;
+  avgReturnPct: number;
+  scoreImpact: number;
+}
+
+export interface PaperSourceFeedbackSummary {
+  sources: number;
+  positiveSources: number;
+  negativeSources: number;
+  avgScoreImpact: number;
+  latestAt: number;
+}
+
+export interface ShadowCategoryTrendPoint {
+  bucketStart: number;
+  category: MarketCategory;
+  simulated: number;
+  realized: number;
+  pnl: number;
+  avgReturnPct: number;
+}
+
+export interface OrderHealthTrendPoint {
+  bucketStart: number;
+  createdOrders: number;
+  filledOrders: number;
+  expiredOrders: number;
+  partialOrders: number;
+  fills: number;
+  filledNotional: number;
+}
+
+export interface AgentThroughputPoint {
+  bucketStart: number;
+  agent: AgentName;
+  events: number;
+  publicEvents: number;
+}
+
+export interface WalletDegradationReport {
+  wallet: string;
+  label?: string;
+  category?: MarketCategory;
+  startScore: number;
+  latestScore: number;
+  scoreChange: number;
+  startCopyabilityScore?: number;
+  latestCopyabilityScore?: number;
+  copyabilityChange?: number;
+  snapshots: number;
+  status: "IMPROVING" | "STABLE" | "DEGRADING";
+  latestAt: number;
+}
+
+export interface SourceCategorySummary {
+  category: MarketCategory;
+  sources: number;
+  avgCopyabilityScore: number;
+  avgScore: number;
+  avgSampleConfidence: number;
+  avgShadowImpact: number;
+  totalTrades: number;
+  highReliability: number;
+}
+
+export interface ReconstructedSourcePosition {
+  wallet: string;
+  marketId: string;
+  tokenId?: string;
+  outcome: OutcomeSide;
+  category: MarketCategory;
+  netSize: number;
+  costBasis: number;
+  avgEntryPrice: number;
+  realizedPnlApprox: number;
+  lastTradeAt: number;
+  status: "OPEN" | "CLOSED";
+}
+
+export interface PaperTradeLedgerEntry {
+  id: string;
+  type: "ENTRY" | "EXIT";
+  profile?: StrategyProfileName;
+  marketId: string;
+  outcome: OutcomeSide;
+  price: number;
+  size: number;
+  notional: number;
+  realizedPnl: number;
+  unrealizedPnl: number;
+  totalPnl: number;
+  equity: number;
+  availableCash: number;
+  createdAt: number;
 }
 
 export interface ShadowTrade {
@@ -354,6 +632,7 @@ export interface BotConfig {
   minPositionSize: number;
   maxPositionSize: number;
   maxOpenExposure: number;
+  reserveCashPct: number;
   maxDailyLoss: number;
   maxLossStreak: number;
   maxTradesPerDay: number;
@@ -364,12 +643,14 @@ export interface BotConfig {
   minLiquidity: number;
   minOrderBookDepth: number;
   minTimeToResolutionHours: number;
+  maxTimeToResolutionHours: number;
   limitOrderTtlMs: number;
   takeProfitPct: number;
   stopLossPct: number;
   volumeSpikeMultiplier: number;
   spreadExitThreshold: number;
   priceReversalPct: number;
+  maxPositionHoldHours: number;
   scanIntervalMs: number;
   walletActivityLimit: number;
   marketScanLimit: number;
@@ -386,6 +667,11 @@ export interface BotConfig {
   shadowMaxEntryPriceMovePct: number;
   shadowPositionSize: number;
   shadowHistoryLimit: number;
+  deepHistoryEnabled: boolean;
+  deepHistoryWalletLimit: number;
+  deepHistoryPages: number;
+  deepHistoryPageSize: number;
+  resolutionBackfillLimit: number;
 }
 
 export interface RuntimeEnv {
@@ -395,5 +681,14 @@ export interface RuntimeEnv {
   clobWsUrl: string;
   dbPath: string;
   telegramBotToken?: string;
+  telegramAdminChatId?: string;
+  telegramPublicChatId?: string;
   telegramChatId?: string;
+  supabaseUrl?: string;
+  supabaseServiceRoleKey?: string;
+  supabaseAnonKey?: string;
+  adminDashboardToken?: string;
+  publicTrackerName?: string;
+  publicTrackerWalletAddress?: string;
+  publicTrackerDisclosure?: string;
 }

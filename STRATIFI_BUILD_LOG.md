@@ -29,6 +29,8 @@ This file tracks the major features added while building StratiFi from the origi
 - Added source score snapshots so wallet scores can be tracked over time.
 - Added market snapshot backfill for market IDs found in wallet trade history.
 - Added cached-first lookup, then Gamma API fallback for missing market metadata.
+- Added configurable paginated source-history pulls for configured wallets and top discovered candidates.
+- Added refreshes for cached historical markets that look ended or closed but are missing resolved-outcome data.
 - Added resolved market fields: `resolved` and `winningOutcome`.
 - Added resolved wallet stats: resolved markets, wins, losses, and win rate.
 
@@ -71,6 +73,14 @@ This file tracks the major features added while building StratiFi from the origi
 - Added `npm run performance`.
 - Added Telegram `/performance`.
 - Added minimum and maximum position sizing through `config/bot.json`.
+- Added paper bankroll/equity tracking for available cash, deployed cost, open value, realized PnL, and total paper equity.
+- Fixed full-book paper fill simulation so best-bid/ask WebSocket snapshots without depth do not block fills.
+- Added dust-order protection so remaining exposure below `minPositionSize` is rejected instead of creating microscopic fills.
+- Added Order Health metrics for filled/open/expired orders, fill rate, stale open orders, dust fills, and average filled notional.
+- Added a conservative paper-copy feedback hook so source scoring can be nudged by actual marked paper-copy performance.
+- Improved paper-copy feedback attribution so multi-source signals split credit and confidence weights the score nudge.
+- Added capital-lockup protection with `maxTimeToResolutionHours` so far-dated markets are rejected before they trap paper capital.
+- Added `reserveCashPct` so normal entries cannot consume the whole bankroll and block future high-priority signals.
 
 ### Telegram And Operations
 
@@ -78,6 +88,11 @@ This file tracks the major features added while building StratiFi from the origi
 - Added formatted alerts for approved signals, rejected signals, fills/exits, pauses, resumes, and errors.
 - Reduced Telegram noise by grouping rejected trade candidates into one compact summary while keeping approved buys as individual alerts.
 - Confirmed public channels can use `@ChannelUsername` style chat IDs when the bot is an admin/member.
+- Split Telegram routing into private admin command/control chat and optional public alert-only channel output.
+- Added `TELEGRAM_ADMIN_CHAT_ID` and `TELEGRAM_PUBLIC_CHAT_ID` while keeping `TELEGRAM_CHAT_ID` as the legacy single-chat fallback.
+- Added Telegram `/bankroll` and `/pnl` for paper equity, cash, deployed capital, and PnL.
+- Added Telegram `/agents` for the three-agent activity summary.
+- Added occasional admin bankroll summaries during live paper operation.
 
 ### Dashboard And Read Models
 
@@ -91,6 +106,16 @@ This file tracks the major features added while building StratiFi from the origi
 - Fixed public signal serialization so aligned wallet addresses are removed at runtime, not only hidden by TypeScript types.
 - Added a dashboard privacy test to make sure source wallet addresses do not leak into public dashboard JSON.
 - Upgraded the dashboard UI with StratiFi branding, agent lanes, Overview/Admin Intelligence tabs, score drift chart, and richer operating tables.
+- Reworked the local dashboard into the StratiFi Viewing Portal layout from the MD dashboard spec.
+- Kept the viewing portal read-only and wired it only to the public-safe `/api/dashboard` model.
+- Removed public exposure of source-pool counts and provider names; the portal now shows abstracted source quality and data-feed health.
+- Added public-safe risk summaries, enriched signal/position market titles, and closed paper positions for the portal tables.
+- Added profile attribution to risk events, paper orders, and positions.
+- Added per-profile paper performance rollups for Conservative and Aggressive dashboard comparison.
+- Added Order Health to the viewing portal.
+- Added dark-mode dashboard styling with blue accents.
+- Added a localhost/token guard for the admin dashboard endpoint.
+- Fixed the remaining Telegram shadow-report mojibake string.
 
 ## Current Status
 
@@ -107,15 +132,11 @@ The current scanner can:
 - create wallet-alignment signals
 - run risk checks through strategy profiles
 - run shadow-copy backtests against source history and market categories
+- nudge source scores from real paper-copy performance
 - serve a public-safe local dashboard from SQLite read models
 - simulate paper orders and exits
 - report PnL and wallet intelligence through CLI and Telegram
 
 ## Next Planned Work
 
-The next likely phase is splitting Telegram into:
-
-- private admin bot commands
-- public alert-only channel output
-
-The next dashboard feature should expose public-safe shadow performance by category without leaking source wallet addresses.
+The next likely phase is using the deeper stored history for richer per-category trend charts, stronger realized paper attribution, and broader resolved-market reconciliation as provider coverage allows.

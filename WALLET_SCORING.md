@@ -131,7 +131,9 @@ This is not perfect historical accounting yet. It does not fully account for unr
 
 StratiFi stores normalized wallet trades in SQLite. Fresh API trades are deduped and merged with previous observations before scoring, so source profiles can improve across scans.
 
-For configured and discovered source wallets, the Signal Agent also backfills market snapshots for market IDs found in trade history. Cached snapshots are reused first; missing markets are fetched from Gamma and saved locally. This gives scoring better category and resolution context over time.
+For configured wallets and top discovered source wallets, the Signal Agent can pull paginated source history. Cached trade history is then reused for scoring, so a wallet's reputation is no longer limited to the latest single API window.
+
+For configured and discovered source wallets, the Signal Agent also backfills market snapshots for market IDs found in trade history. Cached snapshots are reused first; missing markets are fetched from Gamma and saved locally. If a cached market looks ended or closed but lacks resolution data, it can be refreshed. This gives scoring better category and resolution context over time.
 
 When market resolution data is available, StratiFi also tracks:
 
@@ -165,6 +167,21 @@ Shadow-copy performance is now fed back into wallet source scores. The adjustmen
 
 This keeps the bot from blindly rewarding raw wallet PnL when StratiFi cannot realistically copy the entry/exit path.
 
+## Paper Copy Feedback
+
+Paper-copy feedback is also starting to influence source scores. This is based on StratiFi's own paper fills, not historical source-wallet trades.
+
+For each filled paper order, StratiFi joins the fill back to the signal's aligned source wallets and marks the fill against the current paper position price. This creates a small capped score nudge:
+
+- positive marked paper-copy returns can modestly lift score and copyability
+- negative marked paper-copy returns can modestly demote a source
+- small samples are flagged as weak evidence
+- multi-source signals split attribution instead of giving every aligned wallet full credit
+- higher-confidence signals carry slightly more attribution weight
+- paper-copy feedback does not replace shadow-copy or historical scoring
+
+This is still early-stage attribution. It is intentionally capped until the paper bot has a larger forward sample of realized closes.
+
 ## Known Limitations
 
 Current scoring is useful for discovery, but it is not final-grade wallet intelligence yet.
@@ -176,18 +193,18 @@ Main limitations:
 - Market resolution outcomes are only used when the provider payload includes resolution data.
 - Copy delay and order-book slippage are only handled in the paper execution layer, not in historical wallet ranking.
 - Shadow-copy results are score inputs, but marked/fallback-heavy samples are still weaker than realized exits.
+- Paper-copy feedback is still marked from current paper positions and is not yet a full realized attribution engine.
 - Wallets can look good during one market regime and degrade later.
 
 ## Next Improvements
 
 The next scoring upgrades should be:
 
-- Pull deeper wallet history for top candidates.
-- Backfill resolved markets for older wallet positions.
+- Add dashboard trend views for deeper source history, order health, and per-agent throughput.
 - Reconstruct full positions per market/outcome.
-- Backtest “copy after detection” instead of raw wallet PnL.
+- Expand resolved-market reconciliation when provider payloads omit winners.
 - Track wallet degradation over time.
 - Store deeper per-category source history.
 - Demote wallets whose paper-copy performance underperforms their raw historical score.
 
-The long-term goal is simple: StratiFi should not ask “who made money?” It should ask “who can we realistically follow, at our size, with our latency, through liquid markets, while protecting downside?”
+The long-term goal is simple: StratiFi should not ask "who made money?" It should ask "who can we realistically follow, at our size, with our latency, through liquid markets, while protecting downside?"

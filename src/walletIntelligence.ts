@@ -3,6 +3,7 @@ import type {
   DiscoveredWallet,
   MarketCategory,
   MarketSnapshot,
+  PaperSourcePerformance,
   ShadowWalletPerformance,
   TrackedWallet,
   WalletPosition,
@@ -46,6 +47,25 @@ export function applyShadowPerformanceToScore(score: WalletScore, performance?: 
     shadowAvgReturnPct: performance.avgReturnPct,
     shadowWinRate: performance.winRate,
     shadowScoreImpact: impact
+  };
+}
+
+export function applyPaperPerformanceToScore(score: WalletScore, performance?: PaperSourcePerformance): WalletScore {
+  if (!performance || performance.filledOrders === 0 || performance.scoreImpact === 0) return score;
+  const flags = [...score.flags];
+  if (performance.filledOrders < 10) flags.push("PAPER_LOW_SAMPLE");
+  if (performance.scoreImpact <= -3) flags.push("PAPER_COPY_UNDERPERFORMS");
+  if (performance.scoreImpact >= 3) flags.push("PAPER_COPY_OUTPERFORMS");
+  const adjustedScore = Math.round(clamp(score.score + performance.scoreImpact, 0, 100));
+  const adjustedCopyability = score.copyabilityScore === undefined
+    ? undefined
+    : Math.round(clamp(score.copyabilityScore + performance.scoreImpact * 1.2, 0, 100));
+  return {
+    ...score,
+    score: adjustedScore,
+    copyabilityScore: adjustedCopyability,
+    reliability: adjustedScore >= 70 && (score.sampleConfidence ?? 0) >= 0.65 ? "HIGH" : adjustedScore >= 55 ? "MEDIUM" : "LOW",
+    flags
   };
 }
 

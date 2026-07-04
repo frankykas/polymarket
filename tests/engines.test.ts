@@ -1,10 +1,16 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { unlinkSync } from "node:fs";
+import { DecisionCouncil } from "../src/agents/decisionCouncil.js";
+import { MarketIntelligenceAgent } from "../src/agents/marketIntelligenceAgent.js";
+import { applyMicrostructureToQuality, MicrostructureAgent } from "../src/agents/microstructureAgent.js";
 import { BotDatabase } from "../src/db.js";
+import { RiskMitigationAgent } from "../src/agents/riskMitigationAgent.js";
+import { WalletIntelligenceAgent } from "../src/agents/walletIntelligenceAgent.js";
 import { buildAdminDashboardReadModel, buildDashboardReadModel } from "../src/dashboard/readModel.js";
 import {
   PaperExecutionEngine,
+  applyPaperPerformanceToScore,
   applyShadowPerformanceToScore,
   decideExit,
   decideRisk,
@@ -22,7 +28,8 @@ import {
   summarizeShadowPerformanceByWallet,
   summarizeShadowPerformanceByWalletAndCategory
 } from "../src/shadowBacktest.js";
-import type { BotConfig, MarketSnapshot, OrderBookSnapshot, TradeSignal, WalletTrade } from "../src/types.js";
+import { TelegramAlerts } from "../src/telegram.js";
+import type { BotConfig, MarketSnapshot, OrderBookSnapshot, TradeSignal, WalletScore, WalletTrade } from "../src/types.js";
 
 const config: BotConfig = {
   paperMode: true,
@@ -30,6 +37,7 @@ const config: BotConfig = {
   minPositionSize: 2,
   maxPositionSize: 5,
   maxOpenExposure: 25,
+  reserveCashPct: 0.2,
   maxDailyLoss: 10,
   maxLossStreak: 3,
   maxTradesPerDay: 25,
@@ -40,12 +48,14 @@ const config: BotConfig = {
   minLiquidity: 1000,
   minOrderBookDepth: 50,
   minTimeToResolutionHours: 12,
+  maxTimeToResolutionHours: 720,
   limitOrderTtlMs: 120000,
   takeProfitPct: 0.18,
   stopLossPct: 0.08,
   volumeSpikeMultiplier: 3,
   spreadExitThreshold: 0.12,
   priceReversalPct: 0.06,
+  maxPositionHoldHours: 72,
   scanIntervalMs: 60000,
   walletActivityLimit: 100,
   marketScanLimit: 150,
@@ -61,7 +71,12 @@ const config: BotConfig = {
   shadowCopyDelayMs: 30000,
   shadowMaxEntryPriceMovePct: 0.05,
   shadowPositionSize: 5,
-  shadowHistoryLimit: 500
+  shadowHistoryLimit: 500,
+  deepHistoryEnabled: true,
+  deepHistoryWalletLimit: 8,
+  deepHistoryPages: 3,
+  deepHistoryPageSize: 100,
+  resolutionBackfillLimit: 120
 };
 
 const market: MarketSnapshot = {
@@ -309,6 +324,74 @@ test("market quality rejects wide spread and low liquidity", () => {
   assert.match(bad.reasons.join(" "), /spread/);
 });
 
+test("market quality rejects far-dated capital lockup markets", () => {
+  const farDated = evaluateMarketQuality({
+    ...market,
+    endDate: new Date(Date.now() + 900 * 60 * 60 * 1000).toISOString()
+  }, [book], config);
+  assert.equal(farDated.approved, false);
+  assert.match(farDated.reasons.join(" "), /capital lockup/);
+});
+
+test("microstructure agent downgrades stale and thin order books", () => {
+  const agent = new MicrostructureAgent();
+  const staleThinBook: OrderBookSnapshot = {
+    ...book,
+    asks: [{ price: 0.65, size: 1 }],
+    bestAsk: 0.65,
+    spread: 0.14,
+    depth: 2,
+    timestamp: Date.now() - 180_000
+  };
+  const report = agent.review(market, [staleThinBook], config);
+  const quality = applyMicrostructureToQuality(evaluateMarketQuality(market, [book], config), report);
+  assert.equal(report.state, "STALE");
+  assert.equal(quality.approved, false);
+  assert.match(quality.reasons.join(" "), /microstructure/);
+});
+
+test("wallet intelligence penalizes clustered low-evidence source alignment", () => {
+  const agent = new WalletIntelligenceAgent();
+  const signal = sampleSignal({ alignedWallets: ["0xa", "0xb"], confidence: 84 });
+  const scores: WalletScore[] = [
+    { wallet: "0xa", score: 70, copyabilityScore: 55, sampleConfidence: 0.2, tradeCount: 3, recentTradeCount: 3, reliability: "LOW", flags: [], updatedAt: Date.now() },
+    { wallet: "0xb", score: 72, copyabilityScore: 58, sampleConfidence: 0.2, tradeCount: 4, recentTradeCount: 4, reliability: "LOW", flags: [], updatedAt: Date.now() }
+  ];
+  const trades: WalletTrade[] = [
+    { wallet: "0xa", marketId: "m1", outcome: "YES", side: "BUY", price: 0.52, size: 5, timestamp: Date.now() },
+    { wallet: "0xb", marketId: "m1", outcome: "YES", side: "BUY", price: 0.53, size: 5, timestamp: Date.now() + 10_000 }
+  ];
+  const report = agent.reviewSignal(signal, scores, trades);
+  assert.equal(report.state, "WEAK_EVIDENCE");
+  assert.ok(report.clusterPenalty > 0);
+  assert.ok(report.confidenceModifier < 0);
+});
+
+test("decision council rejects when intelligence and microstructure disagree with raw signal", () => {
+  const walletAgent = new WalletIntelligenceAgent();
+  const marketAgent = new MarketIntelligenceAgent();
+  const council = new DecisionCouncil();
+  const microAgent = new MicrostructureAgent();
+  const signal = sampleSignal({ confidence: 88, createdAt: Date.now() - 3 * 60 * 60 * 1000 });
+  const scores: WalletScore[] = [
+    { wallet: "0xabc", score: 82, copyabilityScore: 80, sampleConfidence: 0.8, tradeCount: 20, recentTradeCount: 6, reliability: "HIGH", flags: [], updatedAt: Date.now() }
+  ];
+  const staleReport = microAgent.review(market, [{ ...book, timestamp: Date.now() - 180_000 }], config);
+  const walletReport = walletAgent.reviewSignal(signal, scores, [], Date.now());
+  const marketBrief = marketAgent.review({ market, signal, books: [], scores, walletIntelligence: walletReport });
+  const decision = council.review({
+    signal,
+    quality: applyMicrostructureToQuality(evaluateMarketQuality(market, [book], config), staleReport),
+    riskState: { openExposure: 0, dailyPnl: 0, lossStreak: 0, tradesToday: 0 },
+    config,
+    marketIntelligence: marketBrief,
+    microstructure: staleReport,
+    walletIntelligence: walletReport
+  });
+  assert.equal(decision.consensus, "REJECT");
+  assert.ok(decision.votes.some((vote) => vote.agent === "Microstructure Agent" && vote.vote === "REJECT"));
+});
+
 test("signal generation creates candidate when a scored wallet aligns", () => {
   const trades: WalletTrade[] = [{
     wallet: "0xabc",
@@ -340,15 +423,265 @@ test("risk vetoes exposure and approves healthy candidates", () => {
   assert.equal(approved.decision, "APPROVE");
   const rejected = decideRisk(signal, quality, { openExposure: 25, dailyPnl: 0, lossStreak: 0, tradesToday: 0 }, config);
   assert.equal(rejected.decision, "REJECT");
+  const reserveConfig = { ...config, maxOpenExposure: 200 };
+  const reserveRejected = decideRisk(signal, quality, { openExposure: 160, dailyPnl: 0, lossStreak: 0, tradesToday: 0 }, reserveConfig);
+  assert.equal(reserveRejected.decision, "REJECT");
+  assert.equal(reserveRejected.reason, "reserve cash protected");
+  const dustRejected = decideRisk(signal, quality, { openExposure: 24.5, dailyPnl: 0, lossStreak: 0, tradesToday: 0 }, config);
+  assert.equal(dustRejected.decision, "REJECT");
+  assert.equal(dustRejected.reason, "remaining exposure below minimum position size");
 });
 
 test("paper execution fills limit orders against executable asks", () => {
   const executor = new PaperExecutionEngine();
-  const order = executor.createOrder(sampleSignal(), { decision: "APPROVE", positionSize: 5, reason: "ok" }, config);
+  const order = executor.createOrder(sampleSignal(), { decision: "APPROVE", positionSize: 5, reason: "ok", profile: "Conservative" }, config);
   const simulated = executor.simulate(order, book);
   assert.equal(simulated.order.status, "FILLED");
+  assert.equal(simulated.order.profile, "Conservative");
   assert.ok(simulated.fill);
   assert.ok(simulated.position);
+  assert.equal(simulated.position.profile, "Conservative");
+});
+
+test("database rolls paper orders and positions into profile performance", () => {
+  const path = "data/test-profile-performance.sqlite";
+  for (const suffix of ["", "-wal", "-shm"]) {
+    try {
+      unlinkSync(`${path}${suffix}`);
+    } catch {
+      // test cleanup is best effort
+    }
+  }
+  const db = new BotDatabase(path);
+  const executor = new PaperExecutionEngine();
+  const order = executor.createOrder(sampleSignal(), { decision: "APPROVE", positionSize: 5, reason: "ok", profile: "Aggressive" }, config);
+  const simulated = executor.simulate(order, book);
+  db.saveRiskDecision({ decision: "APPROVE", positionSize: 5, reason: "ok", profile: "Aggressive" });
+  db.savePaperOrder(simulated.order);
+  assert.ok(simulated.position);
+  db.savePosition({
+    ...simulated.position,
+    currentPrice: 0.65,
+    realizedPnl: (0.65 - simulated.position.avgEntryPrice) * simulated.position.size,
+    status: "CLOSED"
+  });
+
+  const profiles = db.getProfilePerformanceReports(10000);
+  const aggressive = profiles.find((profile) => profile.profile === "Aggressive");
+  const conservative = profiles.find((profile) => profile.profile === "Conservative");
+  assert.equal(aggressive?.paperOrders, 1);
+  assert.equal(aggressive?.closedPositions, 1);
+  assert.ok((aggressive?.realizedPnl ?? 0) > 0);
+  assert.equal(conservative?.paperOrders, 0);
+  db.close();
+});
+
+test("paper entries merge into one tracked position and dashboard capital", () => {
+  const path = "data/test-paper-capital.sqlite";
+  for (const suffix of ["", "-wal", "-shm"]) {
+    try {
+      unlinkSync(`${path}${suffix}`);
+    } catch {
+      // test cleanup is best effort
+    }
+  }
+  const db = new BotDatabase(path);
+  const first = db.savePaperEntry({
+    id: "Conservative:m1:yes-token",
+    profile: "Conservative",
+    marketId: "m1",
+    tokenId: "yes-token",
+    outcome: "YES",
+    size: 10,
+    avgEntryPrice: 0.5,
+    currentPrice: 0.52,
+    realizedPnl: 0,
+    openedAt: 1000,
+    updatedAt: 1000,
+    status: "OPEN"
+  });
+  const second = db.savePaperEntry({
+    ...first,
+    size: 5,
+    avgEntryPrice: 0.6,
+    currentPrice: 0.62,
+    openedAt: 2000,
+    updatedAt: 2000
+  });
+
+  const report = db.getPerformanceReport();
+  const dashboard = buildDashboardReadModel(db, 200);
+  assert.equal(report.openPositions, 1);
+  assert.equal(second.size, 15);
+  assert.equal(Number(second.avgEntryPrice.toFixed(4)), 0.5333);
+  assert.equal(Number(report.openCost.toFixed(2)), 8);
+  assert.equal(Number(report.openValue.toFixed(2)), 9.3);
+  assert.equal(Number(dashboard.capital.availableCash.toFixed(2)), 192);
+  assert.equal(Number(dashboard.positions[0]?.entryCost.toFixed(2)), 8);
+  db.close();
+});
+
+test("database reports paper order health and source paper performance", () => {
+  const path = "data/test-order-health.sqlite";
+  for (const suffix of ["", "-wal", "-shm"]) {
+    try {
+      unlinkSync(`${path}${suffix}`);
+    } catch {
+      // test cleanup is best effort
+    }
+  }
+  const db = new BotDatabase(path);
+  const signal = { ...sampleSignal(), id: "sig_order_health", alignedWallets: ["0xsource"] };
+  const executor = new PaperExecutionEngine();
+  const order = executor.createOrder(signal, { decision: "APPROVE", positionSize: 5, reason: "ok", profile: "Aggressive" }, config);
+  const simulated = executor.simulate(order, book);
+  assert.ok(simulated.fill);
+  assert.ok(simulated.position);
+  db.saveSignal(signal);
+  db.savePaperOrder(simulated.order);
+  db.saveFill(simulated.fill);
+  db.savePaperEntry({ ...simulated.position, currentPrice: 0.65 });
+
+  const health = db.getOrderHealthReport(config.minPositionSize);
+  const exposure = db.getExposureHealthReport(config.maxOpenExposure, config.bankroll, config.reserveCashPct);
+  const sourcePerformance = db.getPaperSourcePerformance().get("0xsource");
+  assert.equal(health.filledOrders, 1);
+  assert.equal(health.dustFilledOrders, 0);
+  assert.ok(health.avgFilledNotional >= config.minPositionSize);
+  assert.equal(exposure.status, "AVAILABLE");
+  assert.equal(exposure.activeExposureCap, 25);
+  assert.ok((sourcePerformance?.pnl ?? 0) > 0);
+  assert.equal(db.savePaperSourceFeedback(db.getPaperSourcePerformance().values()), 1);
+  assert.equal(db.getPaperSourceFeedbackSummary().sources, 1);
+
+  const adjusted = applyPaperPerformanceToScore({
+    wallet: "0xsource",
+    score: 65,
+    copyabilityScore: 60,
+    tradeCount: 20,
+    recentTradeCount: 4,
+    reliability: "MEDIUM",
+    flags: [],
+    updatedAt: Date.now()
+  }, sourcePerformance);
+  assert.ok(adjusted.score >= 65);
+  db.close();
+});
+
+test("paper source attribution splits multi-source signal credit", () => {
+  const path = "data/test-paper-source-attribution.sqlite";
+  for (const suffix of ["", "-wal", "-shm"]) {
+    try {
+      unlinkSync(`${path}${suffix}`);
+    } catch {
+      // test cleanup is best effort
+    }
+  }
+  const db = new BotDatabase(path);
+  const signal = { ...sampleSignal(), id: "sig_multi_source", confidence: 80, alignedWallets: ["0xsourcea", "0xsourceb"] };
+  const executor = new PaperExecutionEngine();
+  const order = executor.createOrder(signal, { decision: "APPROVE", positionSize: 5, reason: "ok", profile: "Aggressive" }, config);
+  const simulated = executor.simulate(order, book);
+  assert.ok(simulated.fill);
+  assert.ok(simulated.position);
+  db.saveSignal(signal);
+  db.savePaperOrder(simulated.order);
+  db.saveFill(simulated.fill);
+  db.savePaperEntry({ ...simulated.position, currentPrice: 0.65 });
+
+  const performance = db.getPaperSourcePerformance();
+  const first = performance.get("0xsourcea");
+  const second = performance.get("0xsourceb");
+  assert.equal(first?.filledOrders, 0.5);
+  assert.equal(second?.filledOrders, 0.5);
+  assert.equal(Number((first?.pnl ?? 0).toFixed(4)), Number((second?.pnl ?? 0).toFixed(4)));
+  assert.ok((first?.scoreImpact ?? 0) < 1);
+  db.close();
+});
+
+test("database exposes intelligence trends, degradation, reconstructed source positions, and trade ledger", () => {
+  const path = "data/test-intelligence-layer.sqlite";
+  for (const suffix of ["", "-wal", "-shm"]) {
+    try {
+      unlinkSync(`${path}${suffix}`);
+    } catch {
+      // test cleanup is best effort
+    }
+  }
+  const db = new BotDatabase(path);
+  const events = new AgentEventWriter(db);
+  const signal = { ...sampleSignal(), id: "sig_intel", alignedWallets: ["0xintel"] };
+  const executor = new PaperExecutionEngine();
+  const order = executor.createOrder(signal, { decision: "APPROVE", positionSize: 5, reason: "ok", profile: "Aggressive" }, config);
+  const simulated = executor.simulate(order, book);
+  assert.ok(simulated.fill);
+  assert.ok(simulated.position);
+
+  db.saveMarket({ ...market, question: "Will Bitcoin rally?", slug: "bitcoin-rally" });
+  db.saveSignal(signal);
+  db.savePaperOrder(simulated.order);
+  db.saveFill(simulated.fill);
+  db.savePaperEntry({ ...simulated.position, currentPrice: 0.65 });
+  db.savePosition({
+    ...simulated.position,
+    id: "closed-intel",
+    currentPrice: 0.7,
+    realizedPnl: 2,
+    status: "CLOSED",
+    updatedAt: Date.now() + 1
+  });
+  db.saveWalletTrades([
+    { wallet: "0xintel", marketId: "m1", outcome: "YES", side: "BUY", price: 0.4, size: 10, timestamp: 1000 },
+    { wallet: "0xintel", marketId: "m1", outcome: "YES", side: "SELL", price: 0.6, size: 5, timestamp: 2000 }
+  ]);
+  db.saveWalletScore({
+    wallet: "0xintel",
+    score: 80,
+    copyabilityScore: 78,
+    dominantCategory: "crypto",
+    sampleConfidence: 0.8,
+    tradeCount: 30,
+    recentTradeCount: 4,
+    reliability: "HIGH",
+    flags: [],
+    updatedAt: Date.now() - 10_000
+  });
+  db.saveWalletScore({
+    wallet: "0xintel",
+    score: 65,
+    copyabilityScore: 62,
+    dominantCategory: "crypto",
+    sampleConfidence: 0.8,
+    tradeCount: 31,
+    recentTradeCount: 1,
+    reliability: "MEDIUM",
+    flags: [],
+    updatedAt: Date.now()
+  });
+  db.saveShadowTrades(runShadowBacktest("0xintel", [{
+    wallet: "0xintel",
+    marketId: "m1",
+    outcome: "YES",
+    side: "BUY",
+    price: 0.5,
+    size: 10,
+    timestamp: 1000
+  }], [{ ...market, question: "Will Bitcoin rally?", slug: "bitcoin-rally", resolved: true, winningOutcome: "YES" }], config, Date.now()));
+  events.write({
+    type: "agent.cycle_completed",
+    agent: "Signal Agent",
+    visibility: "PUBLIC",
+    message: "Trend event"
+  });
+
+  assert.ok(db.getPaperTradeLedger(config.bankroll, 10).some((entry) => entry.type === "EXIT" && entry.realizedPnl > 0));
+  assert.ok(db.getShadowCategoryTrend(30).some((point) => point.category === "crypto"));
+  assert.ok(db.getOrderHealthTrend(30).some((point) => point.fills > 0));
+  assert.ok(db.getAgentThroughputTrend(30).some((point) => point.agent === "Signal Agent"));
+  assert.equal(db.getWalletDegradationReport(30, 5)[0]?.status, "DEGRADING");
+  assert.equal(db.getSourceCategorySummaries()[0]?.category, "crypto");
+  assert.equal(db.getReconstructedSourcePositions(5)[0]?.status, "OPEN");
+  db.close();
 });
 
 test("paper execution expires unfilled orders", () => {
@@ -376,6 +709,11 @@ test("exit engine triggers stop loss and take profit", () => {
   assert.equal(stop.decision, "FULL_EXIT");
   const profit = decideExit(position, { ...book, bestBid: 0.6 }, config, { trackedWalletReducing: true, volumeSpike: true });
   assert.equal(profit.decision, "FULL_EXIT");
+  const stale = decideExit({
+    ...position,
+    openedAt: Date.now() - 73 * 60 * 60 * 1000
+  }, { ...book, bestBid: 0.5 }, config);
+  assert.equal(stale.decision, "FULL_EXIT");
 });
 
 test("strategy profiles model conservative and aggressive risk boundaries", () => {
@@ -387,6 +725,30 @@ test("strategy profiles model conservative and aggressive risk boundaries", () =
   assert.equal(conservative.allowedRiskStates.includes("WARNING"), false);
   assert.equal(aggressive.allowedRiskStates.includes("WARNING"), true);
   assert.ok(conservative.minConfidence > aggressive.minConfidence);
+});
+
+test("risk agent persists detailed rejection context", () => {
+  const path = "data/test-risk-details.sqlite";
+  for (const suffix of ["", "-wal", "-shm"]) {
+    try {
+      unlinkSync(`${path}${suffix}`);
+    } catch {
+      // test cleanup is best effort
+    }
+  }
+  const db = new BotDatabase(path);
+  const events = new AgentEventWriter(db);
+  const agent = new RiskMitigationAgent(db, events, config, buildStrategyProfiles(config));
+  const quality = evaluateMarketQuality({ ...market, liquidity: 10 }, [{ ...book, spread: 0.2, depth: 10 }], config);
+  const decision = agent.decide(sampleSignal(), quality, { openExposure: 0, dailyPnl: 0, lossStreak: 0, tradesToday: 0 });
+  assert.equal(decision.decision, "REJECT");
+  assert.match(decision.reason, /market quality failed/);
+  const recent = db.getRecentRiskEvents(1)[0];
+  assert.equal(recent.marketId, "m1");
+  assert.equal(recent.confidence, 82);
+  assert.equal(recent.riskState, "HIGH_RISK");
+  assert.ok(recent.details?.marketQualityReasons?.some((reason) => reason.includes("liquidity")));
+  db.close();
 });
 
 test("agent event writer persists private and public events", () => {
@@ -810,13 +1172,86 @@ test("dashboard read model exposes public-safe summaries", () => {
   assert.equal(dashboard.signals[0]?.alignedSourceCount, 1);
   assert.ok(!JSON.stringify(dashboard).includes("0xsecret"));
   assert.equal(dashboard.shadowCategories[0]?.category, "crypto");
+  assert.ok(Array.isArray(dashboard.trends.shadowCategories));
+  assert.ok(Array.isArray(dashboard.tradeLedger));
+  assert.equal(dashboard.sourceCategories[0]?.category, "other");
   assert.ok(JSON.stringify(admin).includes("0xsecret"));
   assert.equal(admin.walletScores[0]?.score, 82);
   assert.ok(admin.scoreHistory.length > 0);
   db.close();
 });
 
-function sampleSignal(): TradeSignal {
+test("telegram routes public alerts away from admin commands", async () => {
+  const calls: Array<{ chat_id: string; text: string; reply_markup?: unknown }> = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (_input, init) => {
+    calls.push(JSON.parse(String(init?.body)));
+    return new Response(JSON.stringify({ ok: true, result: {} }), {
+      status: 200,
+      headers: { "content-type": "application/json" }
+    });
+  };
+
+  try {
+    const telegram = new TelegramAlerts({
+      gammaApiUrl: "https://gamma.example",
+      dataApiUrl: "https://data.example",
+      clobApiUrl: "https://clob.example",
+      clobWsUrl: "wss://clob.example",
+      dbPath: ":memory:",
+      telegramBotToken: "token",
+      telegramAdminChatId: "admin-chat",
+      telegramPublicChatId: "@public_channel"
+    });
+
+    await telegram.sendApproved({
+      outcome: "YES",
+      question: "Will routing work?",
+      price: 0.51,
+      size: 5,
+      confidence: 88
+    });
+    await telegram.sendPaperEntry({
+      outcome: "YES",
+      marketId: "m1",
+      price: 0.51,
+      sizeUsd: 5,
+      shares: 9.8,
+      unrealizedPnl: 0,
+      totalPnl: 1.25,
+      equity: 201.25,
+      availableCash: 195
+    });
+    await telegram.sendExit({
+      outcome: "YES",
+      marketId: "m1",
+      reason: "take profit reached",
+      price: 0.7,
+      sizeUsd: 6.86,
+      realizedPnl: 1.86,
+      totalPnl: 2.4,
+      equity: 202.4,
+      availableCash: 202.4
+    });
+    await telegram.sendRejectedSummary({ rejected: 2, reasons: new Map([["too far from resolution; capital lockup risk (900h)", 2]]) });
+
+    assert.equal(calls[0]?.chat_id, "@public_channel");
+    assert.equal(calls[0]?.reply_markup, undefined);
+    assert.match(calls[0]?.text, /BUY Signal Approved/);
+    assert.match(calls[1]?.text, /Paper Trade Opened/);
+    assert.match(calls[1]?.text, /Total PnL/);
+    assert.match(calls[2]?.text, /Trade PnL/);
+    assert.equal(calls[3]?.chat_id, "admin-chat");
+    assert.ok(calls[3]?.reply_markup);
+    assert.match(calls[3]?.text, /Risk Filter Summary/);
+    assert.match(calls[3]?.text, /Capital Lockup/);
+    assert.match(calls[3]?.text, /active, copyable opportunities/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+function sampleSignal(overrides: Partial<TradeSignal> = {}): TradeSignal {
   return {
     id: "sig1",
     decision: "TRADE_CANDIDATE",
@@ -829,6 +1264,7 @@ function sampleSignal(): TradeSignal {
     limitPrice: 0.53,
     alignedWallets: ["0xabc"],
     reason: "test",
-    createdAt: Date.now()
+    createdAt: Date.now(),
+    ...overrides
   };
 }

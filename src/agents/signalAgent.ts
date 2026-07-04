@@ -1,6 +1,7 @@
 import type { BotDatabase } from "../db.js";
 import {
   applyShadowPerformanceToScore,
+  applyPaperPerformanceToScore,
   calculateShadowScoreImpact,
   discoverWallets,
   generateSignals,
@@ -21,8 +22,6 @@ import type {
   WalletScore,
   WalletTrade
 } from "../types.js";
-
-const MARKET_BACKFILL_LIMIT = 80;
 
 export interface SignalAgentResult {
   markets: MarketSnapshot[];
@@ -88,26 +87,45 @@ export class SignalAgent {
       });
     }
 
+    const discoveredSeedScores = discoveredWallets.map((wallet) => scoreDiscoveredWallet(wallet));
     const discoveredScores = this.config.autoTrackDiscoveredWallets
-      ? discoveredWallets.map((wallet) => scoreDiscoveredWallet(wallet)).filter((score) => score.score >= this.config.minWalletScore)
+      ? discoveredSeedScores.filter((score) => score.score >= this.config.minWalletScore)
+      : [];
+    const deepHistorySeedScores = this.config.autoTrackDiscoveredWallets && this.config.deepHistoryEnabled
+      ? [...discoveredSeedScores]
+          .sort((a, b) => (b.copyabilityScore ?? b.score) - (a.copyabilityScore ?? a.score))
+          .slice(0, Math.max(0, this.config.deepHistoryWalletLimit))
       : [];
     const trackedWallets = [...wallets];
-    for (const wallet of discoveredScores) {
+    for (const wallet of mergeScores(deepHistorySeedScores, discoveredScores)) {
       if (!trackedWallets.some((tracked) => tracked.address.toLowerCase() === wallet.wallet.toLowerCase())) {
         trackedWallets.push({ address: wallet.wallet, label: "discovered", enabled: true });
       }
     }
     this.db.syncWallets(trackedWallets);
 
-    const walletTrades = await this.fetchWalletTrades(trackedWallets);
+    const deepHistoryWallets = this.deepHistoryWalletSet(wallets, deepHistorySeedScores);
+    const walletTrades = await this.fetchWalletTrades(trackedWallets, deepHistoryWallets);
     const historyMarkets = await this.backfillMarketSnapshots([...walletTrades.values()].flat(), watchedMarkets);
-    const configuredScores = wallets.map((wallet) =>
+    const historyScores = trackedWallets.map((wallet) =>
       scoreWallet(wallet, walletTrades.get(wallet.address.toLowerCase()) ?? [], Date.now(), historyMarkets)
     );
-    const baseScores = mergeScores(configuredScores, discoveredScores);
+    const baseScores = mergeScores(historyScores, discoveredScores);
     const shadowPerformance = this.runShadowBacktests(baseScores, walletTrades, historyMarkets, discoveryTrades);
+    const paperPerformance = this.db.getPaperSourcePerformance();
+    const savedPaperFeedback = this.db.savePaperSourceFeedback(paperPerformance.values());
+    if (savedPaperFeedback > 0) {
+      this.events.write({
+        type: "source.paper_feedback_updated",
+        agent: "Signal Agent",
+        visibility: "PUBLIC",
+        message: "Paper-copy source feedback updated.",
+        payload: { sources: paperPerformance.size, saved: savedPaperFeedback }
+      });
+    }
     const scores = baseScores
       .map((score) => applyShadowPerformanceToScore(score, shadowPerformance.byWallet.get(score.wallet.toLowerCase())))
+      .map((score) => applyPaperPerformanceToScore(score, paperPerformance.get(score.wallet.toLowerCase())))
       .map((score) => ({
         ...score,
         shadowCategoryImpacts: shadowPerformance.categoryImpacts.get(score.wallet.toLowerCase())
@@ -183,12 +201,18 @@ export class SignalAgent {
     return signals;
   }
 
-  async fetchWalletTrades(wallets: TrackedWallet[]): Promise<Map<string, WalletTrade[]>> {
+  async fetchWalletTrades(wallets: TrackedWallet[], deepHistoryWallets = new Set<string>()): Promise<Map<string, WalletTrade[]>> {
     const trades = new Map<string, WalletTrade[]>();
     for (const wallet of wallets) {
-      const walletTrades = await this.provider.getWalletTrades(wallet.address, this.config.walletActivityLimit);
+      const deepHistory = deepHistoryWallets.has(wallet.address.toLowerCase());
+      const walletTrades = deepHistory
+        ? await this.fetchPaginatedWalletTrades(wallet.address)
+        : await this.provider.getWalletTrades(wallet.address, this.config.walletActivityLimit);
       const inserted = this.db.saveWalletTrades(walletTrades);
-      const history = this.db.getWalletTradeHistory(wallet.address, Math.max(this.config.walletActivityLimit, 500));
+      const historyLimit = deepHistory
+        ? Math.max(this.config.walletActivityLimit, this.config.deepHistoryPageSize * this.config.deepHistoryPages, 500)
+        : Math.max(this.config.walletActivityLimit, 500);
+      const history = this.db.getWalletTradeHistory(wallet.address, historyLimit);
       trades.set(wallet.address.toLowerCase(), history.length > 0 ? history : walletTrades);
       if (walletTrades.length > 0) {
         this.events.write({
@@ -199,12 +223,35 @@ export class SignalAgent {
             wallet: wallet.address.toLowerCase(),
             observedTrades: walletTrades.length,
             insertedTrades: inserted,
-            historyTrades: history.length
+            historyTrades: history.length,
+            deepHistory
           }
         });
       }
     }
     return trades;
+  }
+
+  private async fetchPaginatedWalletTrades(wallet: string): Promise<WalletTrade[]> {
+    const pageSize = Math.max(1, this.config.deepHistoryPageSize);
+    const pages = Math.max(1, this.config.deepHistoryPages);
+    const allTrades: WalletTrade[] = [];
+    const seen = new Set<string>();
+
+    for (let page = 0; page < pages; page += 1) {
+      const pageTrades = await this.provider.getWalletTradesPage(wallet, pageSize, page * pageSize);
+      let newTrades = 0;
+      for (const trade of pageTrades) {
+        const key = walletTradeKey(trade);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        allTrades.push(trade);
+        newTrades += 1;
+      }
+      if (pageTrades.length < pageSize || newTrades === 0) break;
+    }
+
+    return allTrades;
   }
 
   private async fetchDiscoveryTrades(markets: MarketSnapshot[]): Promise<WalletTrade[]> {
@@ -228,11 +275,25 @@ export class SignalAgent {
     const ids = [...new Set(trades.flatMap((trade) => [trade.marketId, trade.conditionId]).filter((id): id is string => Boolean(id)))];
     const cached = this.db.getMarketsByIds(ids);
     const known = marketIndex([...seedMarkets, ...cached]);
-    const missing = ids.filter((id) => !known.has(id)).slice(0, MARKET_BACKFILL_LIMIT);
+    const backfillLimit = Math.max(1, this.config.resolutionBackfillLimit);
+    const missing = ids.filter((id) => !known.has(id)).slice(0, backfillLimit);
     const fetched: MarketSnapshot[] = [];
 
     for (const id of missing) {
       const market = await this.provider.getMarketById(id);
+      if (!market) continue;
+      this.db.saveMarket(market);
+      fetched.push(market);
+      if (market.conditionId) known.set(market.conditionId, market);
+      known.set(market.id, market);
+    }
+
+    const refreshCandidates = cached
+      .filter((market) => marketNeedsResolutionRefresh(market))
+      .filter((market) => !fetched.some((candidate) => candidate.id === market.id))
+      .slice(0, Math.max(0, backfillLimit - fetched.length));
+    for (const candidate of refreshCandidates) {
+      const market = await this.provider.getMarketById(candidate.conditionId ?? candidate.id);
       if (!market) continue;
       this.db.saveMarket(market);
       fetched.push(market);
@@ -249,7 +310,8 @@ export class SignalAgent {
           requestedMarkets: ids.length,
           cachedMarkets: cached.length,
           fetchedMarkets: fetched.length,
-          skippedByLimit: Math.max(0, ids.filter((id) => !seedById.has(id)).length - missing.length)
+          refreshedMarkets: refreshCandidates.length,
+          skippedByLimit: Math.max(0, ids.filter((id) => !seedById.has(id)).length - backfillLimit)
         }
       });
     }
@@ -300,6 +362,16 @@ export class SignalAgent {
     });
     return { byWallet, categoryImpacts };
   }
+
+  private deepHistoryWalletSet(configuredWallets: TrackedWallet[], discoveredScores: WalletScore[]): Set<string> {
+    if (!this.config.deepHistoryEnabled) return new Set<string>();
+    const configured = configuredWallets.map((wallet) => wallet.address.toLowerCase());
+    const discovered = [...discoveredScores]
+      .sort((a, b) => (b.copyabilityScore ?? b.score) - (a.copyabilityScore ?? a.score))
+      .slice(0, Math.max(0, this.config.deepHistoryWalletLimit))
+      .map((score) => score.wallet.toLowerCase());
+    return new Set([...configured, ...discovered]);
+  }
 }
 
 interface ShadowPerformanceResult {
@@ -332,6 +404,26 @@ function marketIndex(markets: MarketSnapshot[]): Map<string, MarketSnapshot> {
     if (market.conditionId) index.set(market.conditionId, market);
   }
   return index;
+}
+
+function marketNeedsResolutionRefresh(market: MarketSnapshot, now = Date.now()): boolean {
+  const ended = market.endDate ? Date.parse(market.endDate) <= now : false;
+  const maybeResolved = market.closed || market.archived || ended;
+  return maybeResolved && (!market.resolved || !market.winningOutcome);
+}
+
+function walletTradeKey(trade: WalletTrade): string {
+  return [
+    trade.wallet.toLowerCase(),
+    trade.marketId,
+    trade.conditionId ?? "",
+    trade.tokenId ?? "",
+    trade.outcome,
+    trade.side,
+    trade.price,
+    trade.size,
+    trade.timestamp
+  ].join("|");
 }
 
 function mergeScores(configured: WalletScore[], discovered: WalletScore[]): WalletScore[] {

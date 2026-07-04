@@ -1,0 +1,32 @@
+{
+  "rewrites": [
+    {
+      "source": "/dashboard",
+      "destination": "/dashboard.html"
+    },
+    {
+      "source": "/tracker",
+      "destination": "/tracker.html"
+    }
+  ],
+  "headers": [
+    {
+      "source": "/dashboard-snapshot.json",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "no-store"
+        }
+      ]
+    },
+    {
+      "source": "/health.json",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "no-store"
+        }
+      ]
+    }
+  ]
+}

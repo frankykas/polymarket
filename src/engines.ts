@@ -1,5 +1,5 @@
 import { randomId } from "./db.js";
-import { applyShadowPerformanceToScore, calculateShadowScoreImpact, discoverWallets, inferMarketCategory, scoreDiscoveredWallet, scoreWallet } from "./walletIntelligence.js";
+import { applyPaperPerformanceToScore, applyShadowPerformanceToScore, calculateShadowScoreImpact, discoverWallets, inferMarketCategory, scoreDiscoveredWallet, scoreWallet } from "./walletIntelligence.js";
 import type {
   BotConfig,
   ExitDecision,
@@ -16,7 +16,7 @@ import type {
   WalletTrade
 } from "./types.js";
 
-export { applyShadowPerformanceToScore, calculateShadowScoreImpact, discoverWallets, inferMarketCategory, scoreDiscoveredWallet, scoreWallet };
+export { applyPaperPerformanceToScore, applyShadowPerformanceToScore, calculateShadowScoreImpact, discoverWallets, inferMarketCategory, scoreDiscoveredWallet, scoreWallet };
 
 export function evaluateMarketQuality(
   market: MarketSnapshot,
@@ -30,6 +30,9 @@ export function evaluateMarketQuality(
   if (market.endDate) {
     const hours = (Date.parse(market.endDate) - now) / 3_600_000;
     if (Number.isFinite(hours) && hours < config.minTimeToResolutionHours) reasons.push("too close to resolution");
+    if (Number.isFinite(hours) && config.maxTimeToResolutionHours > 0 && hours > config.maxTimeToResolutionHours) {
+      reasons.push(`too far from resolution; capital lockup risk (${Math.round(hours)}h)`);
+    }
   }
   const validBooks = books.filter((book) => book.bestBid !== undefined && book.bestAsk !== undefined);
   if (validBooks.length === 0) reasons.push("missing usable order book");
@@ -128,10 +131,15 @@ export function decideRisk(signal: TradeSignal, quality: MarketQuality, state: R
   if (signal.confidence < config.minSignalConfidence) return reject("REJECT", "signal confidence too low");
   if (state.openExposure >= config.maxOpenExposure) return reject("REJECT", "max open exposure reached");
 
-  const remainingExposure = Math.max(0, config.maxOpenExposure - state.openExposure);
+  const reserveProtectedCap = config.bankroll * (1 - config.reserveCashPct);
+  const activeExposureCap = Math.min(config.maxOpenExposure, reserveProtectedCap);
+  if (state.openExposure >= activeExposureCap) return reject("REJECT", "reserve cash protected");
+
+  const remainingExposure = Math.max(0, activeExposureCap - state.openExposure);
+  if (remainingExposure < config.minPositionSize) return reject("REJECT", "remaining exposure below minimum position size");
   const confidenceSize = signal.confidence >= 91 ? config.maxPositionSize : signal.confidence >= 81 ? Math.min(4, config.maxPositionSize) : config.minPositionSize;
   const positionSize = Math.min(config.maxPositionSize, Math.max(config.minPositionSize, confidenceSize), remainingExposure);
-  if (positionSize <= 0) return reject("REJECT", "no remaining exposure budget");
+  if (positionSize < config.minPositionSize) return reject("REJECT", "position size below minimum");
   return {
     decision: positionSize < confidenceSize ? "REDUCE_SIZE" : "APPROVE",
     positionSize,
@@ -150,6 +158,7 @@ export class PaperExecutionEngine {
     return {
       id: randomId("ord"),
       signalId: signal.id,
+      profile: decision.profile,
       marketId: signal.marketId,
       tokenId: signal.tokenId,
       outcome: signal.outcome,
@@ -187,7 +196,8 @@ export class PaperExecutionEngine {
       timestamp: now
     };
     const position: Position = {
-      id: `${order.marketId}:${order.tokenId}`,
+      id: `${order.profile ?? "Shared"}:${order.marketId}:${order.tokenId}`,
+      profile: order.profile,
       marketId: order.marketId,
       tokenId: order.tokenId,
       outcome: order.outcome,
@@ -237,6 +247,16 @@ export function decideExit(
   if (opts.localHighPrice && opts.localHighPrice > 0 && (opts.localHighPrice - current) / opts.localHighPrice >= config.priceReversalPct) {
     probability += 20;
     reasons.push("price reversed from local high");
+  }
+  if (config.maxPositionHoldHours > 0) {
+    const holdHours = (Date.now() - position.openedAt) / 3_600_000;
+    if (holdHours >= config.maxPositionHoldHours) {
+      probability += 85;
+      reasons.push("max hold time reached");
+    } else if (holdHours >= config.maxPositionHoldHours * 0.5 && pnlPct < 0) {
+      probability += 25;
+      reasons.push("aging loser");
+    }
   }
   if (book.depth < config.minOrderBookDepth) {
     probability += 15;

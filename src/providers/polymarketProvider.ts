@@ -26,6 +26,10 @@ export class PolymarketProvider {
     return this.clients.data.getWalletTrades(wallet, limit);
   }
 
+  getWalletTradesPage(wallet: string, limit: number, offset: number): Promise<WalletTrade[]> {
+    return this.clients.data.getWalletTradesPage(wallet, limit, offset);
+  }
+
   getWalletPositions(wallet: string): Promise<WalletPosition[]> {
     return this.clients.data.getWalletPositions(wallet);
   }

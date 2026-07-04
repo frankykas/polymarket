@@ -62,10 +62,14 @@ export class DataClient {
   }
 
   async getWalletTrades(wallet: string, limit: number): Promise<WalletTrade[]> {
+    return this.getWalletTradesPage(wallet, limit, 0);
+  }
+
+  async getWalletTradesPage(wallet: string, limit: number, offset: number): Promise<WalletTrade[]> {
     const candidates = [
-      `/trades?user=${wallet}&limit=${limit}`,
-      `/activity?user=${wallet}&limit=${limit}`,
-      `/trades?address=${wallet}&limit=${limit}`
+      `/trades?user=${wallet}&limit=${limit}&offset=${offset}`,
+      `/activity?user=${wallet}&limit=${limit}&offset=${offset}`,
+      `/trades?address=${wallet}&limit=${limit}&offset=${offset}`
     ];
 
     for (const path of candidates) {
@@ -122,6 +126,8 @@ export class ClobMarketWebSocket {
   private reconnectTimer?: NodeJS.Timeout;
   private pingTimer?: NodeJS.Timeout;
   private tokenIds: string[] = [];
+  private subscriptionKey = "";
+  private socketGeneration = 0;
   private handlers: Array<(book: Partial<OrderBookSnapshot> & { tokenId: string }) => void> = [];
 
   constructor(private url: string) {}
@@ -133,27 +139,47 @@ export class ClobMarketWebSocket {
   connect(tokenIds: string[]): void {
     this.tokenIds = [...new Set(tokenIds)];
     if (this.tokenIds.length === 0) return;
+    const nextKey = this.tokenIds.slice().sort().join("|");
+    if (nextKey === this.subscriptionKey && this.socket && this.socket.readyState !== WebSocket.CLOSED) return;
+    this.subscriptionKey = nextKey;
     this.stopped = false;
+    this.closeCurrentSocket();
     this.open();
   }
 
   stop(): void {
     this.stopped = true;
+    this.subscriptionKey = "";
+    this.closeCurrentSocket();
+  }
+
+  private closeCurrentSocket(): void {
+    this.socketGeneration += 1;
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     if (this.pingTimer) clearInterval(this.pingTimer);
-    this.socket?.close();
+    this.reconnectTimer = undefined;
+    this.pingTimer = undefined;
+    const socket = this.socket;
+    this.socket = undefined;
+    if (socket && socket.readyState !== WebSocket.CLOSED && socket.readyState !== WebSocket.CLOSING) socket.close();
   }
 
   private open(): void {
     if (this.stopped) return;
+    if (this.pingTimer) clearInterval(this.pingTimer);
+    this.pingTimer = undefined;
+    const generation = ++this.socketGeneration;
     this.socket = new WebSocket(this.url);
     this.socket.addEventListener("open", () => {
+      if (generation !== this.socketGeneration) return;
       this.subscribe();
       this.pingTimer = setInterval(() => this.send({ type: "ping" }), 10000);
     });
-    this.socket.addEventListener("message", (event) => this.handleMessage(String(event.data)));
-    this.socket.addEventListener("close", () => this.scheduleReconnect());
-    this.socket.addEventListener("error", () => this.scheduleReconnect());
+    this.socket.addEventListener("message", (event) => {
+      if (generation === this.socketGeneration) this.handleMessage(String(event.data));
+    });
+    this.socket.addEventListener("close", () => this.scheduleReconnect(generation));
+    this.socket.addEventListener("error", () => this.scheduleReconnect(generation));
   }
 
   private subscribe(): void {
@@ -167,7 +193,8 @@ export class ClobMarketWebSocket {
     if (this.socket?.readyState === WebSocket.OPEN) this.socket.send(JSON.stringify(payload));
   }
 
-  private scheduleReconnect(): void {
+  private scheduleReconnect(generation: number): void {
+    if (generation !== this.socketGeneration) return;
     if (this.stopped || this.reconnectTimer) return;
     if (this.pingTimer) clearInterval(this.pingTimer);
     this.reconnectTimer = setTimeout(() => {
@@ -225,6 +252,8 @@ async function getJson<T>(url: URL): Promise<T> {
 
 function normalizeMarket(raw: unknown): MarketSnapshot {
   const item = raw as Record<string, unknown>;
+  const winningOutcome = winningOutcomeFrom(item);
+  const resolved = item.resolved ?? item.isResolved ?? (item.resolutionStatus === "resolved" ? true : undefined) ?? (item.closed && winningOutcome);
   return {
     id: String(item.id ?? item.market ?? item.conditionId ?? ""),
     conditionId: stringOrUndefined(item.conditionId),
@@ -234,8 +263,8 @@ function normalizeMarket(raw: unknown): MarketSnapshot {
     closed: Boolean(item.closed),
     archived: Boolean(item.archived),
     acceptingOrders: item.acceptingOrders === undefined ? true : Boolean(item.acceptingOrders),
-    resolved: Boolean(item.resolved ?? item.isResolved ?? (item.closed && (item.winningOutcome || item.winner))),
-    winningOutcome: stringOrUndefined(item.winningOutcome ?? item.winner ?? item.resolutionOutcome),
+    resolved: Boolean(resolved),
+    winningOutcome,
     endDate: stringOrUndefined(item.endDate ?? item.endDateIso),
     liquidity: numberFrom(item.liquidityNum ?? item.liquidityClob ?? item.liquidity),
     volume24h: numberFrom(item.volume24hrClob ?? item.volume24hr ?? item.volume24h ?? item.volume),
@@ -244,6 +273,36 @@ function normalizeMarket(raw: unknown): MarketSnapshot {
     outcomePrices: parseNumberArray(item.outcomePrices),
     raw
   };
+}
+
+function winningOutcomeFrom(item: Record<string, unknown>): string | undefined {
+  const direct = stringOrUndefined(
+    item.winningOutcome ??
+    item.winner ??
+    item.resolutionOutcome ??
+    item.resolution ??
+    item.winning_outcome
+  );
+  if (direct) return direct;
+
+  const outcomes = parseStringArray(item.outcomes);
+  const prices = parseNumberArray(item.outcomePrices ?? item.outcome_prices);
+  if (outcomes.length > 0 && prices.length === outcomes.length) {
+    const winnerIndex = prices.findIndex((price) => price >= 0.999);
+    if (winnerIndex >= 0) return outcomes[winnerIndex];
+  }
+
+  const tokens = Array.isArray(item.tokens) ? item.tokens as Array<Record<string, unknown>> : [];
+  const winningToken = tokens.find((token) => Boolean(token.winner ?? token.winning ?? token.isWinner));
+  const tokenOutcome = winningToken ? stringOrUndefined(winningToken.outcome ?? winningToken.name) : undefined;
+  if (tokenOutcome) return tokenOutcome;
+
+  const markets = Array.isArray(item.markets) ? item.markets as Array<Record<string, unknown>> : [];
+  for (const market of markets) {
+    const nested = winningOutcomeFrom(market);
+    if (nested) return nested;
+  }
+  return undefined;
 }
 
 function normalizeWalletTrade(wallet: string | undefined, raw: unknown): WalletTrade | undefined {

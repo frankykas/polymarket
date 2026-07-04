@@ -24,6 +24,8 @@ Owns final validation, strategy profile selection, position sizing, and approval
 It can:
 - classify signals as `SAFE`, `WARNING`, or `HIGH_RISK`
 - evaluate Conservative and Aggressive profiles separately
+- reject far-dated markets that create capital-lockup risk
+- protect reserve cash for future high-priority opportunities
 - approve, reject, resize, pause, or shadow-reject a signal
 - write `risk.decision_created` events
 
@@ -40,6 +42,8 @@ It can:
 - write `trade.updated` and `trade.closed` events
 
 It cannot create new entries.
+
+In dev mode the Overseer also runs on its own cadence between full market scans. It refreshes order books for open positions, updates marks, evaluates exits, and writes public review summaries.
 
 ## Provider Boundary
 
@@ -88,6 +92,7 @@ Every important handoff should become an event in `agent_events`.
 
 Current event types include:
 - `market.discovery_completed`
+- `agent.cycle_completed`
 - `source.discovered`
 - `source.backfill_completed`
 - `source.scored`
@@ -109,6 +114,10 @@ Market snapshots also carry optional resolution fields:
 When resolution data is available, wallet scoring records resolved wins, resolved losses, resolved markets, and resolved win rate. Public-facing views should show only aggregate source strength and resolved-performance summaries, not the wallet address.
 
 The Signal Agent also backfills market snapshots for market IDs found in stored source history. It uses cached snapshots first, then asks Gamma for missing markets. This gives configured-wallet scoring category and resolution context beyond the active market scan.
+
+For configured wallets and the strongest discovered candidates, the Signal Agent can also pull paginated wallet-trade history. This is controlled by `deepHistoryEnabled`, `deepHistoryWalletLimit`, `deepHistoryPages`, and `deepHistoryPageSize`. The deeper history is deduped into SQLite and then used for scoring, shadow-copy backtests, and market-resolution backfill.
+
+Historical market backfill now also refreshes cached markets that appear ended or closed but lack resolved-outcome data. `resolutionBackfillLimit` caps the amount of provider lookups per scan.
 
 ## Shadow Copy Backtesting
 
@@ -135,11 +144,38 @@ Shadow trades also store inferred market category. The Signal Agent summarizes s
 
 This gives us the foundation for the transparency dashboard, Telegram summaries, audit review, and future backtesting comparisons.
 
+## Paper Copy Feedback
+
+Paper-copy performance is separate from shadow-copy backtesting. When paper fills exist, StratiFi joins the paper fill back to the source-aligned signal and marks that fill against the current paper position price. This produces a small capped source-score adjustment.
+
+The adjustment is intentionally conservative:
+- small samples are flagged as `PAPER_LOW_SAMPLE`
+- strong underperformance is flagged as `PAPER_COPY_UNDERPERFORMS`
+- strong outperformance is flagged as `PAPER_COPY_OUTPERFORMS`
+- paper feedback nudges scores, but does not overpower source history or shadow-copy evidence
+- multi-source signals split attribution across aligned sources
+- signal confidence weights the attribution so stronger paper signals count slightly more
+
+This is the first step toward letting the agents demote wallets that look good historically but perform poorly when copied by StratiFi's actual paper execution.
+
+## Order Health
+
+Paper execution quality is tracked separately from PnL. The dashboard read model reports filled, open, expired, partial, and cancelled orders, fill rate, stale open orders, average filled notional, recent fills, and dust fills.
+
+Dust protection rejects new trades when remaining exposure is below `minPositionSize`, so paper stats are not polluted by microscopic fills near the exposure cap.
+
+## Capital Lockup
+
+The Risk Mitigation Agent protects against two forms of bad timing:
+
+- markets too close to resolution, where volatility and spread can spike
+- markets too far from resolution, where capital can be trapped for weeks or months
+
+`maxTimeToResolutionHours` rejects long-dated markets by default. `reserveCashPct` protects part of bankroll from normal entries, leaving cash available for stronger future source-wallet signals.
+
 ## Next Build Phases
 
-1. Pull deeper paginated source history for top candidates.
-2. Add resolved-market lookup/backfill for older markets not present in active scans.
-3. Split Telegram into private admin commands and public alert-only mode.
-4. Add authentication before exposing admin views beyond localhost.
-5. Add deeper dashboard charts for category shadow-copy drift and per-agent throughput.
-6. Add live-trading interfaces only after paper trading has enough forward performance data.
+1. Add deeper dashboard charts for category shadow-copy drift, order health trends, and per-agent throughput.
+2. Strengthen realized paper attribution as more closed paper positions accumulate.
+3. Broaden resolved-market reconciliation for provider payloads that omit winners.
+4. Add live-trading interfaces only after paper trading has enough forward performance data.

@@ -32,17 +32,29 @@ const ICON = {
 export class TelegramAlerts {
   private enabled: boolean;
   private offset = 0;
-  private chatId?: string;
+  private adminChatId?: string;
+  private publicChatId?: string;
   private statePath = "./data/telegram-state.json";
 
   constructor(private env: RuntimeEnv) {
     this.enabled = Boolean(env.telegramBotToken);
-    this.chatId = env.telegramChatId ?? this.loadStoredChatId();
+    this.adminChatId = env.telegramAdminChatId ?? env.telegramChatId ?? this.loadStoredAdminChatId();
+    this.publicChatId = env.telegramPublicChatId;
   }
 
   async send(message: string): Promise<void> {
-    if (!this.enabled || !this.chatId) return;
-    await this.sendTo(this.chatId, message, mainKeyboard());
+    await this.sendAdmin(message);
+  }
+
+  async sendAdmin(message: string): Promise<void> {
+    if (!this.enabled || !this.adminChatId) return;
+    await this.sendTo(this.adminChatId, message, mainKeyboard());
+  }
+
+  async sendPublic(message: string): Promise<void> {
+    const chatId = this.publicChatId ?? this.adminChatId;
+    if (!this.enabled || !chatId) return;
+    await this.sendTo(chatId, message);
   }
 
   async sendStartup(): Promise<void> {
@@ -58,7 +70,7 @@ export class TelegramAlerts {
   }
 
   async sendApproved(input: { outcome: string; question: string; price: number; size: number; confidence: number }): Promise<void> {
-    await this.send([
+    await this.sendPublic([
       `${ICON.buy} <b>BUY Signal Approved</b>`,
       "",
       `${ICON.target} Outcome: <b>${escapeHtml(input.outcome)}</b>`,
@@ -71,6 +83,32 @@ export class TelegramAlerts {
     ].join("\n"));
   }
 
+  async sendPaperEntry(input: {
+    outcome: string;
+    marketId: string;
+    price: number;
+    sizeUsd: number;
+    shares: number;
+    unrealizedPnl: number;
+    totalPnl: number;
+    equity: number;
+    availableCash: number;
+  }): Promise<void> {
+    await this.sendPublic([
+      `${ICON.buy} <b>Paper Trade Opened</b>`,
+      "",
+      `${ICON.target} Outcome: <b>${escapeHtml(input.outcome)}</b>`,
+      `${ICON.tag} Market: <code>${escapeHtml(input.marketId)}</code>`,
+      `${ICON.money} Entry: <b>${input.price.toFixed(3)}</b> for <b>$${input.sizeUsd.toFixed(2)}</b>`,
+      `${ICON.box} Shares: <b>${input.shares.toFixed(2)}</b>`,
+      `${ICON.chart} Trade PnL: <b>$${input.unrealizedPnl.toFixed(2)}</b>`,
+      `${ICON.money} Total PnL: <b>$${input.totalPnl.toFixed(2)}</b>`,
+      `${ICON.wallet} Equity: <b>$${input.equity.toFixed(2)}</b> | Cash: <b>$${input.availableCash.toFixed(2)}</b>`,
+      "",
+      `${ICON.info} Balance trail updated. Paper mode only.`
+    ].join("\n"));
+  }
+
   async sendRejected(input: { question: string; reason: string }): Promise<void> {
     await this.send([
       `${ICON.reject} <b>Signal Rejected</b>`,
@@ -80,11 +118,36 @@ export class TelegramAlerts {
     ].join("\n"));
   }
 
-  async sendRejectedSummary(input: { rejected: number; reasons: Map<string, number> }): Promise<void> {
+  async sendRejectedSummary(input: {
+    rejected: number;
+    reasons: Map<string, number>;
+    exposure?: { openExposure: number; maxOpenExposure: number; activeExposureCap: number; remainingExposure: number };
+  }): Promise<void> {
     const topReasons = [...input.reasons.entries()]
       .sort((a, b) => b[1] - a[1])
       .slice(0, 5)
       .map(([reason, count]) => `${ICON.shield} <b>${count}</b> ${escapeHtml(reason)}`);
+    const exposureBlocked = input.reasons.has("max open exposure reached") || input.reasons.has("reserve cash protected");
+    const capitalLockupBlocked = [...input.reasons.keys()].some((reason) =>
+      reason.includes("capital lockup") || reason.includes("too far from resolution")
+    );
+    const exposureLines = input.exposure && exposureBlocked
+      ? [
+          "",
+          "<b>Exposure</b>",
+          `${ICON.money} Open exposure: <b>$${input.exposure.openExposure.toFixed(2)}</b> / $${input.exposure.activeExposureCap.toFixed(2)} active cap`,
+          `${ICON.shield} Hard cap: <b>$${input.exposure.maxOpenExposure.toFixed(2)}</b>`,
+          `${ICON.info} New buys are paused until exposure drops, reserve cash is released, or positions close.`
+        ]
+      : [];
+    const lockupLines = capitalLockupBlocked
+      ? [
+          "",
+          "<b>Capital Lockup</b>",
+          `${ICON.shield} Long-dated markets are skipped so paper capital stays focused on active, copyable opportunities.`,
+          `${ICON.info} Increase MAX_TIME_TO_RESOLUTION_HOURS only if you want the bot to hold capital through slower markets.`
+        ]
+      : [];
     await this.send([
       `${ICON.clipboard} <b>Risk Filter Summary</b>`,
       "",
@@ -93,19 +156,36 @@ export class TelegramAlerts {
       "",
       "<b>Top reasons</b>",
       ...topReasons,
+      ...exposureLines,
+      ...lockupLines,
       "",
       `${ICON.info} These are normal skips, not bot errors.`
     ].join("\n"));
   }
 
-  async sendExit(input: { outcome: string; marketId: string; reason: string }): Promise<void> {
-    await this.send([
+  async sendExit(input: {
+    outcome: string;
+    marketId: string;
+    reason: string;
+    price?: number;
+    sizeUsd?: number;
+    realizedPnl?: number;
+    totalPnl?: number;
+    equity?: number;
+    availableCash?: number;
+  }): Promise<void> {
+    await this.sendPublic([
       `${ICON.exit} <b>Paper Exit</b>`,
       "",
       `${ICON.target} <b>${escapeHtml(input.outcome)}</b>`,
       `${ICON.tag} Market: <code>${escapeHtml(input.marketId)}</code>`,
+      input.price !== undefined ? `${ICON.money} Exit mark: <b>${input.price.toFixed(3)}</b>` : "",
+      input.sizeUsd !== undefined ? `${ICON.box} Exit value: <b>$${input.sizeUsd.toFixed(2)}</b>` : "",
+      input.realizedPnl !== undefined ? `${ICON.chart} Trade PnL: <b>$${input.realizedPnl.toFixed(2)}</b>` : "",
+      input.totalPnl !== undefined ? `${ICON.money} Total PnL: <b>$${input.totalPnl.toFixed(2)}</b>` : "",
+      input.equity !== undefined && input.availableCash !== undefined ? `${ICON.wallet} Equity: <b>$${input.equity.toFixed(2)}</b> | Cash: <b>$${input.availableCash.toFixed(2)}</b>` : "",
       `${ICON.door} Reason: ${escapeHtml(input.reason)}`
-    ].join("\n"));
+    ].filter(Boolean).join("\n"));
   }
 
   async sendError(message: string): Promise<void> {
@@ -144,7 +224,10 @@ export class TelegramAlerts {
     const callback = update.callback_query;
     const chatId = String(message?.chat.id ?? callback?.message?.chat.id ?? "");
     if (!chatId) return;
-    this.rememberChatId(chatId);
+    if (!this.adminChatId) {
+      this.rememberAdminChatId(chatId);
+    }
+    if (this.adminChatId !== chatId) return;
 
     if (callback) {
       await this.answerCallback(callback.id);
@@ -165,9 +248,17 @@ export class TelegramAlerts {
     if (normalized === "status") return this.sendTo(chatId, await handlers.status(), mainKeyboard());
     if (normalized === "scan" || normalized === "discover") return this.sendTo(chatId, await handlers.scan(), mainKeyboard());
     if (normalized === "risk") return this.sendTo(chatId, await handlers.risk(), mainKeyboard());
+    if (normalized === "risklog") return this.sendTo(chatId, await handlers.riskLog(), mainKeyboard());
     if (normalized === "wallets") return this.sendTo(chatId, await handlers.wallets(), mainKeyboard());
     if (normalized === "topwallets") return this.sendTo(chatId, await handlers.topWallets(), mainKeyboard());
+    if (normalized === "agents") return this.sendTo(chatId, await handlers.agents(), mainKeyboard());
+    if (normalized === "bankroll" || normalized === "pnl") return this.sendTo(chatId, await handlers.bankroll(), mainKeyboard());
+    if (normalized === "ledger" || normalized === "trades") return this.sendTo(chatId, await handlers.ledger(), mainKeyboard());
     if (normalized === "performance") return this.sendTo(chatId, await handlers.performance(), mainKeyboard());
+    if (normalized === "positions") return this.sendTo(chatId, await handlers.positions(), mainKeyboard());
+    if (normalized.startsWith("close ")) return this.sendTo(chatId, await handlers.close(command.replace(/^\/?close\s+/i, "").trim()), mainKeyboard());
+    if (normalized === "closeall") return this.sendTo(chatId, await handlers.closeAll(false), confirmCloseAllKeyboard());
+    if (normalized === "confirmcloseall") return this.sendTo(chatId, await handlers.closeAll(true), mainKeyboard());
     if (normalized === "shadow") return this.sendTo(chatId, await handlers.shadow(), mainKeyboard());
     if (normalized === "pause") return this.sendTo(chatId, await handlers.pause(), mainKeyboard());
     if (normalized === "resume") return this.sendTo(chatId, await handlers.resume(), mainKeyboard());
@@ -205,20 +296,20 @@ export class TelegramAlerts {
     }
   }
 
-  private loadStoredChatId(): string | undefined {
+  private loadStoredAdminChatId(): string | undefined {
     if (!existsSync(this.statePath)) return undefined;
     try {
-      const state = JSON.parse(readFileSync(this.statePath, "utf8")) as { chatId?: string };
-      return state.chatId;
+      const state = JSON.parse(readFileSync(this.statePath, "utf8")) as { adminChatId?: string; chatId?: string };
+      return state.adminChatId ?? state.chatId;
     } catch {
       return undefined;
     }
   }
 
-  private rememberChatId(chatId: string): void {
-    this.chatId = chatId;
+  private rememberAdminChatId(chatId: string): void {
+    this.adminChatId = chatId;
     mkdirSync(dirname(this.statePath), { recursive: true });
-    writeFileSync(this.statePath, JSON.stringify({ chatId }, null, 2));
+    writeFileSync(this.statePath, JSON.stringify({ adminChatId: chatId }, null, 2));
   }
 }
 
@@ -226,9 +317,16 @@ export interface TelegramHandlers {
   status: () => string | Promise<string>;
   scan: () => string | Promise<string>;
   risk: () => string | Promise<string>;
+  riskLog: () => string | Promise<string>;
   wallets: () => string | Promise<string>;
   topWallets: () => string | Promise<string>;
+  agents: () => string | Promise<string>;
+  bankroll: () => string | Promise<string>;
+  ledger: () => string | Promise<string>;
   performance: () => string | Promise<string>;
+  positions: () => string | Promise<string>;
+  close: (positionRef: string) => string | Promise<string>;
+  closeAll: (confirmed: boolean) => string | Promise<string>;
   shadow: () => string | Promise<string>;
   pause: () => string | Promise<string>;
   resume: () => string | Promise<string>;
@@ -257,18 +355,42 @@ function mainKeyboard(): InlineKeyboard {
       ],
       [
         { text: `${ICON.shield} Risk`, callback_data: "risk" },
+        { text: `${ICON.clipboard} Risk Log`, callback_data: "risklog" }
+      ],
+      [
         { text: `${ICON.wallet} Wallets`, callback_data: "wallets" }
       ],
       [
-        { text: `${ICON.trophy} Top Wallets`, callback_data: "topwallets" }
+        { text: `${ICON.trophy} Top Wallets`, callback_data: "topwallets" },
+        { text: `${ICON.money} Bankroll`, callback_data: "bankroll" }
       ],
       [
-        { text: `${ICON.buy} Performance`, callback_data: "performance" }
+        { text: `${ICON.clipboard} Trade Ledger`, callback_data: "ledger" }
+      ],
+      [
+        { text: `${ICON.bot} Agents`, callback_data: "agents" }
+      ],
+      [
+        { text: `${ICON.buy} Performance`, callback_data: "performance" },
+        { text: `${ICON.box} Positions`, callback_data: "positions" }
+      ],
+      [
+        { text: `${ICON.lab} Shadow`, callback_data: "shadow" },
+        { text: `${ICON.door} Close All`, callback_data: "closeall" }
       ],
       [
         { text: `${ICON.pause} Pause`, callback_data: "pause" },
         { text: `${ICON.resume} Resume`, callback_data: "resume" }
       ]
+    ]
+  };
+}
+
+function confirmCloseAllKeyboard(): InlineKeyboard {
+  return {
+    inline_keyboard: [
+      [{ text: `${ICON.alert} Confirm Close All`, callback_data: "confirmcloseall" }],
+      [{ text: `${ICON.info} Cancel`, callback_data: "positions" }]
     ]
   };
 }
@@ -288,9 +410,16 @@ function menuText(): string {
     "/scan - run one paper scan",
     "/discover - find profitable wallet candidates",
     "/topwallets - ranked wallet intelligence",
+    "/agents - three-agent activity summary",
+    "/bankroll - current paper bankroll and PnL",
+    "/ledger - paper trade PnL and balance trail",
     "/performance - paper PnL report",
+    "/positions - list open paper positions",
+    "/close <number-or-id> - close one paper position",
+    "/closeall - close every open paper position after confirmation",
     "/shadow - shadow-copy backtest",
     "/risk - current limits",
+    "/risklog - latest risk decisions and rejection causes",
     "/wallets - tracked wallets",
     "/pause - pause cycles",
     "/resume - resume cycles"

@@ -4,11 +4,17 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "predev": "node scripts/kill-dev-bot.js",
     "dev": "tsx index.ts dev",
     "scan": "tsx index.ts scan",
     "shadow": "tsx index.ts shadow",
     "performance": "tsx index.ts performance",
-    "dashboard": "tsx src/dashboard/server.ts",
+    "build:server": "tsc -p tsconfig.build.json",
+    "dashboard": "npm run build:server && node dist/src/dashboard/server.js",
+    "dashboard:tsx": "tsx src/dashboard/server.ts",
+    "export-ledger": "tsx src/exportPaperLedger.ts",
+    "export-dashboard": "tsx src/dashboard/exportStatic.ts",
+    "publish-dashboard": "tsx src/dashboard/publishSupabase.ts",
     "test": "node --import tsx --test tests/*.test.ts",
     "typecheck": "tsc --noEmit"
   },
