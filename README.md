@@ -158,7 +158,11 @@ Edit `config/bot.json`:
 - `maxPositionSize`: largest paper bet size in USDC.
 - `maxOpenExposure`: maximum total open paper exposure.
 - `reserveCashPct`: paper bankroll percentage protected from normal entries for future high-priority opportunities.
-- `maxTimeToResolutionHours`: rejects far-dated markets that could lock capital too long.
+- `maxTimeToResolutionHours`: rejects far-dated markets that could lock capital too long. `maxPositionHoldHours` bounds actual lockup regardless, so this entry gate can stay generous.
+- `minEntryPrice` / `maxEntryPrice`: outcome-price band for trade candidates. Extreme longshots are noise-dominated and extreme favorites have negative asymmetry, so prices outside the band watchlist but never trade.
+- `stopLossAbs` / `takeProfitAbs`: absolute probability moves for exits (e.g. 0.06 / 0.10). These replace the relative-percentage stops that stopped cheap positions out on ordinary price noise. If unset, the bot falls back to `stopLossPct` / `takeProfitPct`.
+- `sourceExitEnabled`: when true, the Overseer exits a position once a seeding source wallet sells the same outcome (the exit shadow-copy backtesting shows is profitable).
+- `stopCooldownMs`: after a losing stop-out, how long before the same market/outcome can be re-entered. Prevents re-entry churn.
 - `maxDailyLoss`: auto-pause/reject threshold for daily realized loss.
 - `deepHistoryEnabled`, `deepHistoryWalletLimit`, `deepHistoryPages`, `deepHistoryPageSize`: pull paginated source-wallet history for configured wallets and top discovered candidates.
 - `resolutionBackfillLimit`: caps how many historical market snapshots can be fetched/refreshed per scan for category and resolved-outcome scoring.

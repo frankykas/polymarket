@@ -840,6 +840,70 @@ export class BotDatabase {
     };
   }
 
+  /**
+   * Detects whether any source wallet that seeded this position has SOLD the
+   * same outcome since the position opened. The shadow-copy backtest shows the
+   * "source sold after detection" exit is the profitable one, so the Overseer
+   * uses this to exit alongside the wallets it copied instead of on price noise.
+   */
+  getPositionSourceExit(position: Position, now = Date.now()): { sourceSold: boolean; sellerCount: number } {
+    const walletRows = this.db.prepare(`
+      SELECT DISTINCT s.aligned_wallets_json
+      FROM paper_orders po
+      JOIN signals s ON s.id = po.signal_id
+      WHERE po.market_id = ?
+        AND po.token_id = ?
+        AND COALESCE(po.profile, 'Shared') = COALESCE(?, 'Shared')
+    `).all(position.marketId, position.tokenId, position.profile ?? null) as Array<{ aligned_wallets_json: string }>;
+
+    const wallets = new Set<string>();
+    for (const row of walletRows) {
+      try {
+        const parsed = JSON.parse(row.aligned_wallets_json) as unknown;
+        if (Array.isArray(parsed)) for (const wallet of parsed) wallets.add(String(wallet).toLowerCase());
+      } catch {
+        // ignore malformed alignment payloads
+      }
+    }
+    if (wallets.size === 0) return { sourceSold: false, sellerCount: 0 };
+
+    const walletList = [...wallets];
+    const placeholders = walletList.map(() => "?").join(",");
+    const sellers = this.db.prepare(`
+      SELECT DISTINCT wallet
+      FROM wallet_trades
+      WHERE wallet IN (${placeholders})
+        AND side = 'SELL'
+        AND timestamp >= ?
+        AND (
+          token_id = ?
+          OR (market_id = ? AND LOWER(outcome) = LOWER(?))
+        )
+    `).all(...walletList, position.openedAt, position.tokenId, position.marketId, position.outcome) as Array<{ wallet: string }>;
+
+    return { sourceSold: sellers.length > 0, sellerCount: sellers.length };
+  }
+
+  /**
+   * True when this exact token was closed at a realized loss inside the cooldown
+   * window. Prevents the re-entry churn where the bot repeatedly re-buys a market
+   * it was just stopped out of on the same source signal.
+   */
+  isMarketInStopCooldown(marketId: string, tokenId: string, cooldownMs: number, now = Date.now()): boolean {
+    if (!(cooldownMs > 0)) return false;
+    const row = this.db.prepare(`
+      SELECT MAX(updated_at) AS last_stop
+      FROM positions
+      WHERE market_id = ?
+        AND token_id = ?
+        AND status = 'CLOSED'
+        AND realized_pnl < 0
+    `).get(marketId, tokenId) as { last_stop: number | null } | undefined;
+    const lastStop = row?.last_stop ?? null;
+    if (!lastStop) return false;
+    return now - lastStop < cooldownMs;
+  }
+
   getPerformanceReport(): PerformanceReport {
     const openRow = this.db.prepare(`
       SELECT

@@ -416,6 +416,53 @@ test("signal generation creates candidate when a scored wallet aligns", () => {
   assert.equal(signals[0].decision, "TRADE_CANDIDATE");
 });
 
+test("signal generation keeps extreme-priced copies off the trade candidate path", () => {
+  const scores: WalletScore[] = [{
+    wallet: "0xabc",
+    score: 95,
+    tradeCount: 10,
+    recentTradeCount: 5,
+    reliability: "HIGH",
+    flags: [],
+    updatedAt: Date.now()
+  }];
+  const favouriteBook: OrderBookSnapshot = { ...book, tokenId: "yes-token", bestAsk: 0.97, bestBid: 0.96, spread: 0.01 };
+  const favouriteTrade: WalletTrade = {
+    wallet: "0xabc", marketId: "m1", tokenId: "yes-token", outcome: "YES", side: "BUY", price: 0.97, size: 10, timestamp: Date.now()
+  };
+  const favourite = generateSignals(market, [favouriteBook], [favouriteTrade], scores, config)[0];
+  assert.equal(favourite.decision, "WATCHLIST");
+
+  const longshotBook: OrderBookSnapshot = { ...book, tokenId: "yes-token", bestAsk: 0.04, bestBid: 0.03, spread: 0.01 };
+  const longshotTrade: WalletTrade = {
+    wallet: "0xabc", marketId: "m1", tokenId: "yes-token", outcome: "YES", side: "BUY", price: 0.04, size: 10, timestamp: Date.now()
+  };
+  const longshot = generateSignals(market, [longshotBook], [longshotTrade], scores, config)[0];
+  assert.equal(longshot.decision, "WATCHLIST");
+});
+
+test("shadow scoring demotes wallets that lose money when copied", () => {
+  const winner = applyShadowPerformanceToScore({
+    wallet: "0xwin", score: 65, copyabilityScore: 65, tradeCount: 40, recentTradeCount: 6,
+    reliability: "MEDIUM", flags: [], sampleConfidence: 0.8, updatedAt: Date.now()
+  }, {
+    wallet: "0xwin", total: 40, simulated: 40, realized: 20, marked: 18, fallback: 2, pnl: 30,
+    realizedPnl: 25, wins: 26, losses: 14, winRate: 0.65, avgReturnPct: 0.06, realizedAvgReturnPct: 0.08
+  });
+  const loser = applyShadowPerformanceToScore({
+    wallet: "0xlose", score: 82, copyabilityScore: 82, tradeCount: 400, recentTradeCount: 20,
+    reliability: "HIGH", flags: [], sampleConfidence: 0.9, updatedAt: Date.now()
+  }, {
+    wallet: "0xlose", total: 60, simulated: 60, realized: 25, marked: 30, fallback: 5, pnl: -40,
+    realizedPnl: -35, wins: 18, losses: 42, winRate: 0.3, avgReturnPct: -0.05, realizedAvgReturnPct: -0.07
+  });
+  // The high-volume whale that copies badly should fall below the mid-tier copier.
+  assert.ok((loser.shadowScoreImpact ?? 0) < 0);
+  assert.ok(loser.flags.includes("SHADOW_COPY_UNDERPERFORMS"));
+  assert.ok(loser.score < winner.score + 15);
+  assert.ok(winner.score > 65);
+});
+
 test("risk vetoes exposure and approves healthy candidates", () => {
   const signal = sampleSignal();
   const quality = evaluateMarketQuality(market, [book], config);
@@ -714,6 +761,90 @@ test("exit engine triggers stop loss and take profit", () => {
     openedAt: Date.now() - 73 * 60 * 60 * 1000
   }, { ...book, bestBid: 0.5 }, config);
   assert.equal(stale.decision, "FULL_EXIT");
+});
+
+test("exit engine uses absolute price stops so cheap longshots survive noise", () => {
+  const longshot = {
+    id: "p-longshot",
+    marketId: "m1",
+    tokenId: "yes-token",
+    outcome: "YES",
+    size: 40,
+    avgEntryPrice: 0.08,
+    currentPrice: 0.08,
+    realizedPnl: 0,
+    openedAt: Date.now(),
+    updatedAt: Date.now(),
+    status: "OPEN" as const
+  };
+  const absConfig = { ...config, stopLossAbs: 0.06, takeProfitAbs: 0.1 };
+  // A 0.074 bid is a 7.5% relative drop (would stop under the old rule) but only
+  // 0.006 absolute, well inside noise, so it must hold.
+  const noise = decideExit(longshot, { ...book, bestBid: 0.074, bestAsk: 0.09, spread: 0.016 }, absConfig);
+  assert.equal(noise.decision, "HOLD");
+  // A real 0.06 absolute drop still stops out.
+  const realStop = decideExit(longshot, { ...book, bestBid: 0.02, bestAsk: 0.04, spread: 0.02 }, absConfig);
+  assert.equal(realStop.decision, "FULL_EXIT");
+  assert.match(realStop.reason, /stop loss/);
+});
+
+test("exit engine fully exits when the seeding source wallet sells", () => {
+  const position = {
+    id: "p-source",
+    marketId: "m1",
+    tokenId: "yes-token",
+    outcome: "YES",
+    size: 10,
+    avgEntryPrice: 0.5,
+    currentPrice: 0.5,
+    realizedPnl: 0,
+    openedAt: Date.now(),
+    updatedAt: Date.now(),
+    status: "OPEN" as const
+  };
+  const followed = decideExit(position, { ...book, bestBid: 0.5, bestAsk: 0.52, spread: 0.02 }, config, {
+    trackedWalletReducing: true
+  });
+  assert.equal(followed.decision, "FULL_EXIT");
+  assert.match(followed.reason, /source wallet exiting/);
+});
+
+test("database detects source-sell exits and stop-out cooldowns", () => {
+  const path = "data/test-source-exit.sqlite";
+  for (const suffix of ["", "-wal", "-shm"]) {
+    try {
+      unlinkSync(`${path}${suffix}`);
+    } catch {
+      // test cleanup is best effort
+    }
+  }
+  const db = new BotDatabase(path);
+  const signal = { ...sampleSignal(), id: "sig_source_exit", alignedWallets: ["0xsource"] };
+  const executor = new PaperExecutionEngine();
+  const order = executor.createOrder(signal, { decision: "APPROVE", positionSize: 5, reason: "ok", profile: "Aggressive" }, config);
+  const simulated = executor.simulate(order, book);
+  assert.ok(simulated.position);
+  db.saveSignal(signal);
+  db.savePaperOrder(simulated.order);
+  const entered = db.savePaperEntry({ ...simulated.position, openedAt: 1000, updatedAt: 1000 });
+
+  // No source sell yet.
+  assert.equal(db.getPositionSourceExit(entered).sourceSold, false);
+
+  // Source sells the same outcome after entry.
+  db.saveWalletTrades([
+    { wallet: "0xsource", marketId: "m1", tokenId: "yes-token", outcome: "YES", side: "SELL", price: 0.6, size: 5, timestamp: 2000 }
+  ]);
+  const exit = db.getPositionSourceExit(entered);
+  assert.equal(exit.sourceSold, true);
+  assert.equal(exit.sellerCount, 1);
+
+  // Cooldown blocks re-entry only after a losing close of the same token.
+  assert.equal(db.isMarketInStopCooldown("m1", "yes-token", 3_600_000, 5000), false);
+  db.savePosition({ ...entered, realizedPnl: -0.3, status: "CLOSED", updatedAt: 4000 });
+  assert.equal(db.isMarketInStopCooldown("m1", "yes-token", 3_600_000, 5000), true);
+  assert.equal(db.isMarketInStopCooldown("m1", "yes-token", 3_600_000, 4000 + 3_600_001), false);
+  db.close();
 });
 
 test("strategy profiles model conservative and aggressive risk boundaries", () => {

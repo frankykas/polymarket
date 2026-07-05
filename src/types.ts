@@ -639,6 +639,10 @@ export interface BotConfig {
   minSignalConfidence: number;
   minWalletScore: number;
   minAlignedWallets: number;
+  /** Lowest outcome price StratiFi will treat as a trade candidate. Longshots below this are noise-dominated. Default 0.08. */
+  minEntryPrice?: number;
+  /** Highest outcome price StratiFi will treat as a trade candidate. Favorites above this have negative asymmetry. Default 0.92. */
+  maxEntryPrice?: number;
   maxSpread: number;
   minLiquidity: number;
   minOrderBookDepth: number;
@@ -647,6 +651,14 @@ export interface BotConfig {
   limitOrderTtlMs: number;
   takeProfitPct: number;
   stopLossPct: number;
+  /** Absolute price (probability) drop that triggers a hard stop, e.g. 0.06. Falls back to stopLossPct when unset. */
+  stopLossAbs?: number;
+  /** Absolute price (probability) gain counted as a take-profit signal, e.g. 0.10. Falls back to takeProfitPct when unset. */
+  takeProfitAbs?: number;
+  /** When true, the Overseer exits a position once a seeding source wallet sells the same outcome. */
+  sourceExitEnabled?: boolean;
+  /** Cooldown after a losing stop-out on a token before it can be re-entered, in ms. 0 disables. */
+  stopCooldownMs?: number;
   volumeSpikeMultiplier: number;
   spreadExitThreshold: number;
   priceReversalPct: number;

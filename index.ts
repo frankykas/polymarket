@@ -212,6 +212,12 @@ class PolymarketPaperBot {
             debate
           });
           if (risk.decision === "APPROVE" || risk.decision === "REDUCE_SIZE") {
+            const cooldownMs = this.config.stopCooldownMs ?? 0;
+            if (this.db.isMarketInStopCooldown(signal.marketId, signal.tokenId, cooldownMs)) {
+              result.rejected += 1;
+              rejectedReasons.set("stop-out cooldown active", (rejectedReasons.get("stop-out cooldown active") ?? 0) + 1);
+              continue;
+            }
             result.approved += 1;
             await this.telegram.sendApproved({
               outcome: signal.outcome,

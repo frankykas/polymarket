@@ -407,14 +407,22 @@ function copyabilityPenalty(flags: string[], performance: WalletPerformance): nu
 }
 
 export function calculateShadowScoreImpact(performance: ShadowWalletPerformance): number {
+  // Copy-performance (how a wallet's trades actually perform when StratiFi copies
+  // them) is the strongest predictor of forward PnL, so it must be able to move a
+  // source score more than base reputation. The audit showed base reputation
+  // over-ranks high-volume whales that copy poorly, so we widen the band and
+  // penalize proven-unprofitable copying harder than we reward good copying.
   const sampleWeight = clamp(performance.simulated / 25, 0, 1);
   const realizedWeight = clamp(performance.realized / 10, 0, 1);
   const fallbackRatio = performance.simulated > 0 ? performance.fallback / performance.simulated : 0;
   const markQuality = 1 - fallbackRatio * 0.6;
-  const allTradeReturn = clamp(performance.avgReturnPct / 0.08, -1, 1) * 7 * sampleWeight * markQuality;
-  const realizedReturn = clamp(performance.realizedAvgReturnPct / 0.1, -1, 1) * 6 * realizedWeight;
-  const winRateTilt = clamp((performance.winRate - 0.5) / 0.35, -1, 1) * 3 * sampleWeight;
-  return Math.round(clamp(allTradeReturn + realizedReturn + winRateTilt, -15, 15));
+  const allTradeReturn = clamp(performance.avgReturnPct / 0.08, -1, 1) * 9 * sampleWeight * markQuality;
+  const realizedReturn = clamp(performance.realizedAvgReturnPct / 0.1, -1, 1) * 9 * realizedWeight;
+  const winRateTilt = clamp((performance.winRate - 0.5) / 0.35, -1, 1) * 5 * sampleWeight;
+  const raw = allTradeReturn + realizedReturn + winRateTilt;
+  // Asymmetric: demote wallets that lose money when copied more than we promote winners.
+  const shaped = raw < 0 ? raw * 1.4 : raw;
+  return Math.round(clamp(shaped, -28, 20));
 }
 
 function analyzeWalletPerformance(trades: WalletTrade[]): WalletPerformance {

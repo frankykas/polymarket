@@ -90,16 +90,24 @@ export function generateSignals(
       35,
       alignedWallets.reduce((sum, wallet) => sum + (scoreByWallet.get(wallet)?.score ?? 0), 0) / alignedWallets.length * 0.35
     );
-    const priceComponent = Math.max(0, 25 - Math.max(0, limitPrice - 0.5) * 20);
+    // Prefer mid-priced outcomes symmetrically: extreme longshots are noise-dominated
+    // and extreme favorites have terrible asymmetry (risk a dollar to make a cent).
+    const priceComponent = Math.max(0, 25 - Math.abs(limitPrice - 0.5) * 40);
     const categoryShadowComponent = alignedWallets.reduce((sum, wallet) => {
       const impact = scoreByWallet.get(wallet)?.shadowCategoryImpacts?.[marketCategory] ?? 0;
       return sum + Math.max(-8, Math.min(8, impact));
     }, 0) / alignedWallets.length;
     const confidence = Math.round(Math.min(100, Math.max(0, walletComponent + scoreComponent + priceComponent + categoryShadowComponent)));
 
+    // Hard price band: below/above these the copy has no realistic edge, so it can
+    // watchlist but never becomes a tradable candidate regardless of confidence.
+    const minEntryPrice = config.minEntryPrice ?? 0.08;
+    const maxEntryPrice = config.maxEntryPrice ?? 0.92;
+    const withinEntryBand = limitPrice >= minEntryPrice && limitPrice <= maxEntryPrice;
+
     signals.push({
       id: randomId("sig"),
-      decision: confidence >= config.minSignalConfidence ? "TRADE_CANDIDATE" : "WATCHLIST",
+      decision: withinEntryBand && confidence >= config.minSignalConfidence ? "TRADE_CANDIDATE" : "WATCHLIST",
       marketId: market.id,
       conditionId: market.conditionId,
       tokenId,
@@ -220,15 +228,21 @@ export function decideExit(
   opts: { volumeSpike?: boolean; trackedWalletReducing?: boolean; localHighPrice?: number } = {}
 ): ExitDecision {
   const current = book.bestBid ?? book.lastTradePrice ?? position.currentPrice;
-  const pnlPct = position.avgEntryPrice > 0 ? (current - position.avgEntryPrice) / position.avgEntryPrice : 0;
+  // Prediction-market prices are probabilities: a fixed *relative* stop is a
+  // fraction of a cent on a 0.05 longshot but a huge move on a 0.90 favorite,
+  // so noise stops every cheap position out. Use an absolute probability move.
+  const priceMove = current - position.avgEntryPrice;
+  const takeProfitMove = config.takeProfitAbs ?? position.avgEntryPrice * config.takeProfitPct;
+  const stopLossMove = config.stopLossAbs ?? position.avgEntryPrice * config.stopLossPct;
+  const pnlPct = position.avgEntryPrice > 0 ? priceMove / position.avgEntryPrice : 0;
   const reasons: string[] = [];
   let probability = 0;
 
-  if (pnlPct >= config.takeProfitPct) {
+  if (priceMove >= takeProfitMove) {
     probability += 35;
     reasons.push("take profit reached");
   }
-  if (pnlPct <= -config.stopLossPct) {
+  if (priceMove <= -stopLossMove) {
     probability += 100;
     reasons.push("stop loss reached");
   }
@@ -241,8 +255,11 @@ export function decideExit(
     reasons.push("volume spike");
   }
   if (opts.trackedWalletReducing) {
-    probability += 35;
-    reasons.push("tracked wallet reducing");
+    // The seeding source wallet is selling the same outcome. The shadow-copy
+    // backtest shows this is the profitable moment to exit, so follow it out
+    // decisively rather than waiting for a price-based trigger.
+    probability += 85;
+    reasons.push("source wallet exiting");
   }
   if (opts.localHighPrice && opts.localHighPrice > 0 && (opts.localHighPrice - current) / opts.localHighPrice >= config.priceReversalPct) {
     probability += 20;

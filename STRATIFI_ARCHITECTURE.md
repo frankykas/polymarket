@@ -37,11 +37,25 @@ Owns open position monitoring and exits.
 
 It can:
 - review open positions against current order books
+- exit a position when a seeding source wallet sells the same outcome (source-following exit)
+- apply absolute-price stops and take-profit instead of relative-percentage triggers
 - trigger hold, partial exit, or full exit decisions
 - update paper PnL
 - write `trade.updated` and `trade.closed` events
 
 It cannot create new entries.
+
+The Overseer's exits are driven first by source behavior. Shadow-copy backtesting
+shows that following a source wallet's own sell is the profitable exit, while
+exiting on interim price marks loses money. When any source wallet that seeded a
+position sells the same outcome, the Overseer exits alongside it. Price stops use
+an absolute probability move (`stopLossAbs`, `takeProfitAbs`) because a fixed
+percentage stop is a fraction of a cent on a cheap longshot and a large move on a
+favorite, which previously stopped positions out on ordinary bid/ask noise.
+
+After a position is closed at a realized loss, the same market/outcome enters a
+`stopCooldownMs` window during which the Risk Mitigation Agent will not re-enter
+it, preventing repeated re-entry into a market that just stopped out.
 
 In dev mode the Overseer also runs on its own cadence between full market scans. It refreshes order books for open positions, updates marks, evaluates exits, and writes public review summaries.
 

@@ -21,7 +21,12 @@ export class OverseerAgent {
     for (const position of this.db.getOpenPositions()) {
       const book = orderBooks.get(position.tokenId);
       if (!book) continue;
-      const exit = decideExit(position, book, this.config);
+      const sourceExit = this.config.sourceExitEnabled === false
+        ? { sourceSold: false, sellerCount: 0 }
+        : this.db.getPositionSourceExit(position);
+      const exit = decideExit(position, book, this.config, {
+        trackedWalletReducing: sourceExit.sourceSold
+      });
       this.db.saveExitDecision(position.id, exit);
       this.events.write({
         type: "trade.updated",
