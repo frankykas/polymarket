@@ -846,7 +846,7 @@ export class BotDatabase {
    * "source sold after detection" exit is the profitable one, so the Overseer
    * uses this to exit alongside the wallets it copied instead of on price noise.
    */
-  getPositionSourceExit(position: Position, now = Date.now()): { sourceSold: boolean; sellerCount: number } {
+  getPositionSourceExit(position: Position, now = Date.now()): { sourceSold: boolean; sellerCount: number; sourceCount: number } {
     const walletRows = this.db.prepare(`
       SELECT DISTINCT s.aligned_wallets_json
       FROM paper_orders po
@@ -865,7 +865,7 @@ export class BotDatabase {
         // ignore malformed alignment payloads
       }
     }
-    if (wallets.size === 0) return { sourceSold: false, sellerCount: 0 };
+    if (wallets.size === 0) return { sourceSold: false, sellerCount: 0, sourceCount: 0 };
 
     const walletList = [...wallets];
     const placeholders = walletList.map(() => "?").join(",");
@@ -881,7 +881,7 @@ export class BotDatabase {
         )
     `).all(...walletList, position.openedAt, position.tokenId, position.marketId, position.outcome) as Array<{ wallet: string }>;
 
-    return { sourceSold: sellers.length > 0, sellerCount: sellers.length };
+    return { sourceSold: sellers.length > 0, sellerCount: sellers.length, sourceCount: wallets.size };
   }
 
   /**

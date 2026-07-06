@@ -126,7 +126,9 @@ export function generateSignals(
 
 function isTradeableSource(score: WalletScore, config: BotConfig): boolean {
   if (score.flags.includes("SHADOW_COPY_UNDERPERFORMS") || score.flags.includes("SHADOW_NEGATIVE_PNL")) return false;
-  if (score.flags.includes("SHADOW_MOSTLY_FALLBACK_MARKS") && (score.shadowPnl ?? 0) <= 0) return false;
+  if (score.flags.includes("SHADOW_MOSTLY_FALLBACK_MARKS")) return false;
+  if (score.flags.includes("NO_SELL_HISTORY") || score.flags.includes("LOW_SELL_HISTORY")) return false;
+  if (score.flags.includes("ILLIQUID_EARLY_ENTRY_RISK")) return false;
 
   const isDiscoveredOrProbation =
     score.label === "discovered" ||
@@ -137,11 +139,16 @@ function isTradeableSource(score: WalletScore, config: BotConfig): boolean {
 
   const minTrades = config.minShadowTradesForPromotion ?? 20;
   const minPnl = config.minShadowPnlForPromotion ?? 0;
+  const minCategoryConsistency = config.minCategoryConsistencyForPromotion ?? 55;
+  const minCopyability = config.minCopyabilityForPromotion ?? config.minWalletScore;
   const simulated = score.shadowSimulated ?? 0;
   const pnl = score.shadowPnl ?? 0;
   const realized = score.shadowRealized ?? 0;
   const proven = score.flags.includes("SHADOW_PROVEN_COPYABLE");
-  return proven && simulated >= minTrades && realized > 0 && pnl > minPnl;
+  const categoryOk = (score.categoryConsistencyScore ?? 0) >= minCategoryConsistency;
+  const copyabilityOk = (score.copyabilityScore ?? score.score) >= minCopyability;
+  const evidenceOk = (score.sampleConfidence ?? 0) >= 0.55;
+  return proven && simulated >= minTrades && realized > 0 && pnl > minPnl && categoryOk && copyabilityOk && evidenceOk;
 }
 
 export interface RiskState {
@@ -246,7 +253,7 @@ export function decideExit(
   position: Position,
   book: OrderBookSnapshot,
   config: BotConfig,
-  opts: { volumeSpike?: boolean; trackedWalletReducing?: boolean; localHighPrice?: number } = {}
+  opts: { volumeSpike?: boolean; trackedWalletReducing?: boolean; sourceSellerCount?: number; sourceCount?: number; localHighPrice?: number } = {}
 ): ExitDecision {
   const current = book.bestBid ?? book.lastTradePrice ?? position.currentPrice;
   // Prediction-market prices are probabilities: a fixed *relative* stop is a
@@ -279,8 +286,11 @@ export function decideExit(
     // The seeding source wallet is selling the same outcome. The shadow-copy
     // backtest shows this is the profitable moment to exit, so follow it out
     // decisively rather than waiting for a price-based trigger.
-    probability += 85;
-    reasons.push("source wallet exiting");
+    const sellerCount = opts.sourceSellerCount ?? 1;
+    const sourceCount = Math.max(1, opts.sourceCount ?? sellerCount);
+    const sellerRatio = sellerCount / sourceCount;
+    probability += sellerCount >= 2 || sellerRatio >= 0.5 ? 100 : 85;
+    reasons.push(sellerCount >= 2 ? `${sellerCount} source wallets exiting` : "source wallet exiting");
   }
   if (opts.localHighPrice && opts.localHighPrice > 0 && (opts.localHighPrice - current) / opts.localHighPrice >= config.priceReversalPct) {
     probability += 20;

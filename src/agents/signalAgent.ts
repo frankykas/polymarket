@@ -108,7 +108,7 @@ export class SignalAgent {
     const walletTrades = await this.fetchWalletTrades(trackedWallets, deepHistoryWallets);
     const historyMarkets = await this.backfillMarketSnapshots([...walletTrades.values()].flat(), watchedMarkets);
     const historyScores = trackedWallets.map((wallet) =>
-      scoreWallet(wallet, walletTrades.get(wallet.address.toLowerCase()) ?? [], Date.now(), historyMarkets)
+      scoreWallet(wallet, walletTrades.get(wallet.address.toLowerCase()) ?? [], Date.now(), historyMarkets, this.config)
     );
     const baseScores = mergeScores(historyScores, discoveredScores);
     const shadowPerformance = this.runShadowBacktests(baseScores, walletTrades, historyMarkets, discoveryTrades);

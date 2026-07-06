@@ -272,6 +272,18 @@ export interface IntelligenceReviewContext {
   microstructure?: MicrostructureReport;
   walletIntelligence?: WalletIntelligenceReport;
   debate?: AgentDebateDecision;
+  sourceScores?: Array<{
+    wallet: string;
+    score: number;
+    copyabilityScore?: number;
+    shadowScoreImpact?: number;
+    shadowPnl?: number;
+    shadowSimulated?: number;
+    shadowRealized?: number;
+    categoryConsistencyScore?: number;
+    sampleConfidence?: number;
+    flags: string[];
+  }>;
 }
 
 export interface PaperOrder {
@@ -434,6 +446,11 @@ export interface RecentRiskEvent {
     microstructureReasons?: string[];
     walletIntelligenceScore?: number;
     walletIntelligenceState?: WalletIntelligenceReport["state"];
+    sourceWalletCount?: number;
+    sourceScores?: IntelligenceReviewContext["sourceScores"];
+    entryPrice?: number;
+    marketQualityAtApproval?: number;
+    riskReasonAtApproval?: string;
     debateConsensus?: AgentDebateDecision["consensus"];
     debateScore?: number;
     debateVotes?: AgentVote[];
@@ -687,6 +704,12 @@ export interface BotConfig {
   minShadowPnlForPromotion?: number;
   /** Require shadow proof for auto-discovered/probation wallets before they can create trade candidates. */
   requireShadowProofForDiscovered?: boolean;
+  /** Minimum sell/buy ratio required before a source can be treated as copyable. */
+  minSellRatioForPromotion?: number;
+  /** Minimum category consistency required before a discovered source can become tradeable. */
+  minCategoryConsistencyForPromotion?: number;
+  /** Minimum copyability score required before a discovered source can become tradeable. */
+  minCopyabilityForPromotion?: number;
   shadowCopyDelayMs: number;
   shadowMaxEntryPriceMovePct: number;
   shadowPositionSize: number;

@@ -90,6 +90,7 @@ export function discoverWallets(
   markets: MarketSnapshot[] = []
 ): DiscoveredWallet[] {
   const categoryByMarket = buildCategoryIndex(markets);
+  const liquidityByMarket = buildLiquidityIndex(markets);
   const resolutionByMarket = buildResolutionIndex(markets);
   const positionsByWallet = new Map<string, WalletPosition[]>();
   for (const position of positions) {
@@ -134,11 +135,13 @@ export function discoverWallets(
       tradeCount,
       totalVolume,
       uniqueMarkets,
+      buyCount,
       sellCount,
       performance,
       walletPositions,
       sampleConfidence,
-      dominantProfile
+      dominantProfile,
+      illiquidTradeRatio: illiquidTradeRatio(sorted, liquidityByMarket, config.minLiquidity)
     }, config);
 
     const overallScore = capByEvidence(scoreOverallReputation({
@@ -205,13 +208,20 @@ export function discoverWallets(
     .slice(0, config.maxDiscoveredWallets);
 }
 
-export function scoreWallet(wallet: TrackedWallet, trades: WalletTrade[], now = Date.now(), markets: MarketSnapshot[] = []): WalletScore {
+export function scoreWallet(
+  wallet: TrackedWallet,
+  trades: WalletTrade[],
+  now = Date.now(),
+  markets: MarketSnapshot[] = [],
+  config: Partial<BotConfig> = {}
+): WalletScore {
   const dayAgo = now - 24 * 60 * 60 * 1000;
   const recentTradeCount = trades.filter((trade) => trade.timestamp >= dayAgo).length;
   const tradeCount = trades.length;
   const uniqueMarkets = new Set(trades.map((trade) => trade.marketId)).size;
   const sorted = [...trades].sort((a, b) => a.timestamp - b.timestamp);
   const categoryProfiles = buildCategoryProfiles(sorted, buildCategoryIndex(markets));
+  const liquidityByMarket = buildLiquidityIndex(markets);
   const dominantProfile = categoryProfiles[0];
   const resolvedStats = analyzeResolvedOutcomes(sorted, buildResolutionIndex(markets));
   const performance = analyzeWalletPerformance(sorted);
@@ -230,6 +240,10 @@ export function scoreWallet(wallet: TrackedWallet, trades: WalletTrade[], now = 
   if (uniqueMarkets <= 1 && tradeCount > 5) flags.push("CONCENTRATED");
   if (recentTradeCount === 0) flags.push("STALE");
   if (performance.maxDrawdownApprox > 0.25) flags.push("HIGH_DRAWDOWN");
+  const minLiquidity = config.minLiquidity ?? 750;
+  if (trades.filter((trade) => trade.side === "SELL").length / Math.max(1, trades.filter((trade) => trade.side === "BUY").length) < (config.minSellRatioForPromotion ?? 0.2)) flags.push("LOW_SELL_HISTORY");
+  if ((dominantProfile?.score ?? 0) < (config.minCategoryConsistencyForPromotion ?? 55)) flags.push("WEAK_CATEGORY_EDGE");
+  if (illiquidTradeRatio(sorted, liquidityByMarket, minLiquidity) > 0.35) flags.push("ILLIQUID_EARLY_ENTRY_RISK");
 
   const score = capByEvidence(scoreOverallReputation({
     tradeCount,
@@ -256,7 +270,7 @@ export function scoreWallet(wallet: TrackedWallet, trades: WalletTrade[], now = 
     tradeCount,
     recentTradeCount,
     reliability: score >= 70 && sampleConfidence >= 0.65 ? "HIGH" : score >= 55 ? "MEDIUM" : "LOW",
-    flags,
+    flags: uniqueFlags(flags),
     updatedAt: now
   };
 }
@@ -290,11 +304,13 @@ function buildWalletFlags(input: {
   tradeCount: number;
   totalVolume: number;
   uniqueMarkets: number;
+  buyCount: number;
   sellCount: number;
   performance: WalletPerformance;
   walletPositions: WalletPosition[];
   sampleConfidence: number;
   dominantProfile: CategoryProfile;
+  illiquidTradeRatio: number;
 }, config: BotConfig): string[] {
   const flags: string[] = [];
   if (input.tradeCount < config.minDiscoveryTrades) flags.push("LOW_TRADE_COUNT");
@@ -303,12 +319,15 @@ function buildWalletFlags(input: {
   if (input.totalVolume < config.minDiscoveryVolume) flags.push("LOW_VOLUME");
   if (input.uniqueMarkets <= 1 && input.tradeCount >= config.minDiscoveryTrades) flags.push("SINGLE_MARKET");
   if (input.sellCount === 0) flags.push("NO_SELL_HISTORY");
+  if (input.sellCount / Math.max(1, input.buyCount) < (config.minSellRatioForPromotion ?? 0.2)) flags.push("LOW_SELL_HISTORY");
   if (input.performance.realizedPnlApprox < 0) flags.push("NEGATIVE_REALIZED_APPROX");
   if (input.walletPositions.length === 0) flags.push("NO_OPEN_POSITION_PREVIEW");
   if (input.performance.avgHoldMinutesApprox < 1 && input.sellCount > 0) flags.push("VERY_FAST_TRADER");
   if (input.performance.maxDrawdownApprox > 0.25) flags.push("HIGH_DRAWDOWN");
   if (input.sampleConfidence < 0.5) flags.push("WEAK_EVIDENCE");
   if (input.dominantProfile.score < 50) flags.push("WEAK_CATEGORY_EDGE");
+  if (input.dominantProfile.score < (config.minCategoryConsistencyForPromotion ?? 55)) flags.push("CATEGORY_BELOW_PROMOTION_BAR");
+  if (input.illiquidTradeRatio > 0.35) flags.push("ILLIQUID_EARLY_ENTRY_RISK");
   return flags;
 }
 
@@ -512,6 +531,26 @@ function buildResolutionIndex(markets: MarketSnapshot[]): Map<string, MarketReso
     if (market.conditionId) index.set(market.conditionId, resolution);
   }
   return index;
+}
+
+function buildLiquidityIndex(markets: MarketSnapshot[]): Map<string, number> {
+  const index = new Map<string, number>();
+  for (const market of markets) {
+    index.set(market.id, market.liquidity);
+    if (market.conditionId) index.set(market.conditionId, market.liquidity);
+  }
+  return index;
+}
+
+function illiquidTradeRatio(trades: WalletTrade[], liquidityByMarket: Map<string, number>, minLiquidity: number): number {
+  if (trades.length === 0) return 0;
+  const known = trades.filter((trade) => liquidityByMarket.has(trade.marketId) || liquidityByMarket.has(trade.conditionId ?? ""));
+  if (known.length === 0) return 0;
+  const illiquid = known.filter((trade) => {
+    const liquidity = liquidityByMarket.get(trade.marketId) ?? liquidityByMarket.get(trade.conditionId ?? "") ?? 0;
+    return liquidity < minLiquidity;
+  });
+  return illiquid.length / known.length;
 }
 
 function analyzeResolvedOutcomes(

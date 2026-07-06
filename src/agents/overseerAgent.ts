@@ -22,10 +22,12 @@ export class OverseerAgent {
       const book = orderBooks.get(position.tokenId);
       if (!book) continue;
       const sourceExit = this.config.sourceExitEnabled === false
-        ? { sourceSold: false, sellerCount: 0 }
+        ? { sourceSold: false, sellerCount: 0, sourceCount: 0 }
         : this.db.getPositionSourceExit(position);
       const exit = decideExit(position, book, this.config, {
-        trackedWalletReducing: sourceExit.sourceSold
+        trackedWalletReducing: sourceExit.sourceSold,
+        sourceSellerCount: sourceExit.sellerCount,
+        sourceCount: sourceExit.sourceCount
       });
       this.db.saveExitDecision(position.id, exit);
       this.events.write({
@@ -37,9 +39,25 @@ export class OverseerAgent {
           positionId: position.id,
           decision: exit.decision,
           exitProbability: exit.exitProbability,
-          reason: exit.reason
+          reason: exit.reason,
+          sourceExit
         }
       });
+      if (sourceExit.sourceSold && exit.decision !== "FULL_EXIT") {
+        this.events.write({
+          type: "mirror_exit.missed",
+          agent: "Overseer Agent",
+          visibility: "PRIVATE",
+          message: `Source sell detected for ${position.outcome}, but position did not fully close.`,
+          payload: {
+            positionId: position.id,
+            marketId: position.marketId,
+            outcome: position.outcome,
+            sourceExit,
+            exit
+          }
+        });
+      }
 
       if (exit.decision === "FULL_EXIT") {
         const currentPrice = book.bestBid ?? position.currentPrice;

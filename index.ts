@@ -20,7 +20,7 @@ import { buildStrategyProfiles } from "./src/profiles/profiles.js";
 import { PolymarketProvider } from "./src/providers/polymarketProvider.js";
 import { TelegramAlerts } from "./src/telegram.js";
 import { exportPaperTradeLedgerFile } from "./src/paperTradeLedgerFile.js";
-import type { MarketSnapshot, OrderBookSnapshot, PaperOrder, Position, WalletScore } from "./src/types.js";
+import type { IntelligenceReviewContext, MarketSnapshot, OrderBookSnapshot, PaperOrder, Position, TradeSignal, WalletScore } from "./src/types.js";
 
 type Mode = "dev" | "scan" | "performance" | "shadow";
 const devPidPath = "data/polymarket-paper-bot.dev.pid";
@@ -209,7 +209,8 @@ class PolymarketPaperBot {
             marketIntelligence,
             microstructure,
             walletIntelligence,
-            debate
+            debate,
+            sourceScores: this.sourceScoreAudit(signal, signalState.scores)
           });
           if (risk.decision === "APPROVE" || risk.decision === "REDUCE_SIZE") {
             const cooldownMs = this.config.stopCooldownMs ?? 0;
@@ -273,6 +274,24 @@ class PolymarketPaperBot {
       this.handleError(error);
       return result;
     }
+  }
+
+  private sourceScoreAudit(signal: TradeSignal, scores: WalletScore[]): NonNullable<IntelligenceReviewContext["sourceScores"]> {
+    const aligned = new Set(signal.alignedWallets.map((wallet) => wallet.toLowerCase()));
+    return scores
+      .filter((score) => aligned.has(score.wallet.toLowerCase()))
+      .map((score) => ({
+        wallet: score.wallet.toLowerCase(),
+        score: score.score,
+        copyabilityScore: score.copyabilityScore,
+        shadowScoreImpact: score.shadowScoreImpact,
+        shadowPnl: score.shadowPnl,
+        shadowSimulated: score.shadowSimulated,
+        shadowRealized: score.shadowRealized,
+        categoryConsistencyScore: score.categoryConsistencyScore,
+        sampleConfidence: score.sampleConfidence,
+        flags: score.flags
+      }));
   }
 
   private async getBooksForMarket(market: MarketSnapshot): Promise<OrderBookSnapshot[]> {

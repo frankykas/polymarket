@@ -68,6 +68,26 @@ export class RiskMitigationAgent {
       confidence: signal.confidence,
       riskState
     };
+    if ((decision.decision === "APPROVE" || decision.decision === "REDUCE_SIZE") && context?.microstructure) {
+      if (context.microstructure.executableAskDepth < decision.positionSize) {
+        const rejected: RiskDecision = {
+          decision: "REJECT",
+          positionSize: 0,
+          reason: `order-book depth supports $${context.microstructure.executableAskDepth.toFixed(2)} below intended $${decision.positionSize.toFixed(2)}`,
+          profile: profile.name,
+          confidence: signal.confidence,
+          riskState,
+          shadow: true
+        };
+        this.persist(signal, rejected, quality, state, context);
+        return rejected;
+      }
+      if (riskState === "WARNING" || quality.score < 70 || context.microstructure.score < 70) {
+        decision.decision = "REDUCE_SIZE";
+        decision.positionSize = Math.min(decision.positionSize, this.config.minPositionSize);
+        decision.reason = `reduced for ${riskState.toLowerCase()} market quality: ${decision.reason}`;
+      }
+    }
     this.persist(signal, decision, quality, state, context);
     return decision;
   }
@@ -95,6 +115,11 @@ export class RiskMitigationAgent {
         microstructureReasons: context?.microstructure?.reasons,
         walletIntelligenceScore: context?.walletIntelligence?.score,
         walletIntelligenceState: context?.walletIntelligence?.state,
+        sourceWalletCount: signal.alignedWallets.length,
+        sourceScores: context?.sourceScores,
+        entryPrice: signal.limitPrice,
+        marketQualityAtApproval: quality.score,
+        riskReasonAtApproval: decision.reason,
         debateConsensus: context?.debate?.consensus,
         debateScore: context?.debate?.consensusScore,
         debateVotes: context?.debate?.votes,
@@ -136,7 +161,8 @@ export class RiskMitigationAgent {
             ? {
                 state: context.walletIntelligence.state,
                 score: context.walletIntelligence.score,
-                independentSourceCount: context.walletIntelligence.independentSourceCount
+                independentSourceCount: context.walletIntelligence.independentSourceCount,
+                sourceScoreCount: context.sourceScores?.length ?? 0
               }
             : undefined,
           debate: context?.debate
@@ -158,6 +184,12 @@ function intelligenceVetoReason(context?: IntelligenceReviewContext): string | u
   }
   if (context.walletIntelligence && context.walletIntelligence.state === "UNKNOWN") {
     return "wallet intelligence veto: no usable aligned source evidence";
+  }
+  if (context.sourceScores?.some((score) => score.flags.includes("SHADOW_MOSTLY_FALLBACK_MARKS"))) {
+    return "source audit veto: shadow edge depends on stale/fallback marks";
+  }
+  if (context.sourceScores?.some((score) => score.flags.includes("SHADOW_COPY_UNDERPERFORMS") || score.flags.includes("SHADOW_NEGATIVE_PNL"))) {
+    return "source audit veto: source loses when copied";
   }
   if (context.marketIntelligence?.thesis === "REJECT_CONTEXT" && context.marketIntelligence.contextScore < 45) {
     return `market intelligence veto: ${context.marketIntelligence.publicSummary}`;

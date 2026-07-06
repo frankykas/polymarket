@@ -454,6 +454,8 @@ test("signal generation requires shadow proof for discovered probation wallets",
     label: "discovered",
     score: 100,
     copyabilityScore: 100,
+    categoryConsistencyScore: 70,
+    sampleConfidence: 0.82,
     shadowSimulated: 25,
     shadowRealized: 10,
     shadowPnl: 12,
@@ -492,6 +494,29 @@ test("signal generation blocks wallets that underperform in shadow copy", () => 
     updatedAt: Date.now()
   };
   assert.equal(generateSignals(market, [book], [trade], [badCopy], config).length, 0);
+});
+
+test("signal generation blocks stale-mark and no-sell source edges", () => {
+  const trade: WalletTrade = {
+    wallet: "0xstaleedge", marketId: "m1", tokenId: "yes-token", outcome: "YES", side: "BUY", price: 0.52, size: 10, timestamp: Date.now()
+  };
+  const base: WalletScore = {
+    wallet: "0xstaleedge",
+    score: 96,
+    copyabilityScore: 96,
+    categoryConsistencyScore: 80,
+    sampleConfidence: 0.9,
+    shadowSimulated: 60,
+    shadowRealized: 1,
+    shadowPnl: 50,
+    tradeCount: 300,
+    recentTradeCount: 20,
+    reliability: "HIGH",
+    flags: ["SHADOW_PROVEN_COPYABLE"],
+    updatedAt: Date.now()
+  };
+  assert.equal(generateSignals(market, [book], [trade], [{ ...base, flags: ["SHADOW_PROVEN_COPYABLE", "SHADOW_MOSTLY_FALLBACK_MARKS"] }], config).length, 0);
+  assert.equal(generateSignals(market, [book], [trade], [{ ...base, flags: ["SHADOW_PROVEN_COPYABLE", "NO_SELL_HISTORY"] }], config).length, 0);
 });
 
 test("shadow scoring demotes wallets that lose money when copied", () => {
@@ -893,6 +918,7 @@ test("database detects source-sell exits and stop-out cooldowns", () => {
   const exit = db.getPositionSourceExit(entered);
   assert.equal(exit.sourceSold, true);
   assert.equal(exit.sellerCount, 1);
+  assert.equal(exit.sourceCount, 1);
 
   // Cooldown blocks re-entry only after a losing close of the same token.
   assert.equal(db.isMarketInStopCooldown("m1", "yes-token", 3_600_000, 5000), false);
@@ -926,7 +952,20 @@ test("risk agent persists detailed rejection context", () => {
   const events = new AgentEventWriter(db);
   const agent = new RiskMitigationAgent(db, events, config, buildStrategyProfiles(config));
   const quality = evaluateMarketQuality({ ...market, liquidity: 10 }, [{ ...book, spread: 0.2, depth: 10 }], config);
-  const decision = agent.decide(sampleSignal(), quality, { openExposure: 0, dailyPnl: 0, lossStreak: 0, tradesToday: 0 });
+  const decision = agent.decide(sampleSignal(), quality, { openExposure: 0, dailyPnl: 0, lossStreak: 0, tradesToday: 0 }, {
+    sourceScores: [{
+      wallet: "0xabc",
+      score: 72,
+      copyabilityScore: 74,
+      shadowScoreImpact: 4,
+      shadowPnl: 12,
+      shadowSimulated: 30,
+      shadowRealized: 12,
+      categoryConsistencyScore: 70,
+      sampleConfidence: 0.8,
+      flags: ["SHADOW_PROVEN_COPYABLE"]
+    }]
+  });
   assert.equal(decision.decision, "REJECT");
   assert.match(decision.reason, /market quality failed/);
   const recent = db.getRecentRiskEvents(1)[0];
@@ -934,6 +973,9 @@ test("risk agent persists detailed rejection context", () => {
   assert.equal(recent.confidence, 82);
   assert.equal(recent.riskState, "HIGH_RISK");
   assert.ok(recent.details?.marketQualityReasons?.some((reason) => reason.includes("liquidity")));
+  assert.equal(recent.details?.sourceWalletCount, 1);
+  assert.equal(recent.details?.entryPrice, sampleSignal().limitPrice);
+  assert.equal(recent.details?.sourceScores?.[0]?.shadowPnl, 12);
   db.close();
 });
 
