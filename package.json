@@ -17,6 +17,8 @@
     "publish-dashboard": "tsx src/dashboard/publishSupabase.ts",
     "cleanup:daily:dry": "tsx scripts/dailyCleanup.ts",
     "cleanup:daily": "tsx scripts/dailyCleanup.ts --apply",
+    "wallets:promote:dry": "tsx scripts/promoteDiscoveredWallets.ts",
+    "wallets:promote": "tsx scripts/promoteDiscoveredWallets.ts --apply",
     "test": "node --import tsx --test tests/*.test.ts",
     "typecheck": "tsc --noEmit"
   },

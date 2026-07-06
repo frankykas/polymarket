@@ -65,6 +65,7 @@ export function generateSignals(
   for (const trade of trades) {
     const score = scoreByWallet.get(trade.wallet.toLowerCase());
     if (!score || score.score < config.minWalletScore || trade.side !== "BUY") continue;
+    if (!isTradeableSource(score, config)) continue;
     const key = `${trade.marketId}:${trade.outcome}`;
     const list = grouped.get(key) ?? [];
     list.push(trade);
@@ -121,6 +122,26 @@ export function generateSignals(
     });
   }
   return signals.sort((a, b) => b.confidence - a.confidence);
+}
+
+function isTradeableSource(score: WalletScore, config: BotConfig): boolean {
+  if (score.flags.includes("SHADOW_COPY_UNDERPERFORMS") || score.flags.includes("SHADOW_NEGATIVE_PNL")) return false;
+  if (score.flags.includes("SHADOW_MOSTLY_FALLBACK_MARKS") && (score.shadowPnl ?? 0) <= 0) return false;
+
+  const isDiscoveredOrProbation =
+    score.label === "discovered" ||
+    score.label?.startsWith("discovered-") ||
+    score.flags.includes("DISCOVERY_LOW_SCORE") ||
+    score.flags.includes("WEAK_EVIDENCE");
+  if (!isDiscoveredOrProbation || config.requireShadowProofForDiscovered === false) return true;
+
+  const minTrades = config.minShadowTradesForPromotion ?? 20;
+  const minPnl = config.minShadowPnlForPromotion ?? 0;
+  const simulated = score.shadowSimulated ?? 0;
+  const pnl = score.shadowPnl ?? 0;
+  const realized = score.shadowRealized ?? 0;
+  const proven = score.flags.includes("SHADOW_PROVEN_COPYABLE");
+  return proven && simulated >= minTrades && realized > 0 && pnl > minPnl;
 }
 
 export interface RiskState {

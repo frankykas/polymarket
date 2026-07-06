@@ -329,7 +329,7 @@ export class SignalAgent {
     const allObservedTrades = [...walletTrades.values()].flat().concat(discoveryTrades);
     const allShadowTrades = scores.flatMap((score) => {
       const trades = walletTrades.get(score.wallet.toLowerCase()) ?? [];
-      if (trades.length === 0 || score.score < this.config.minWalletScore) return [];
+      if (trades.length === 0 || !this.shouldShadowAudit(score)) return [];
       return runShadowBacktest(
         score.wallet,
         trades.slice(-this.config.shadowHistoryLimit),
@@ -361,6 +361,16 @@ export class SignalAgent {
       }
     });
     return { byWallet, categoryImpacts };
+  }
+
+  private shouldShadowAudit(score: WalletScore): boolean {
+    const candidateMinScore = this.config.shadowCandidateMinScore ?? Math.max(0, this.config.minWalletScore - 25);
+    const copyability = score.copyabilityScore ?? score.score;
+    if (score.score >= this.config.minWalletScore) return true;
+    if (score.label === "discovered" || score.label?.startsWith("discovered-")) {
+      return score.score >= candidateMinScore || copyability >= candidateMinScore;
+    }
+    return copyability >= candidateMinScore && (score.sampleConfidence ?? 0) >= 0.35;
   }
 
   private deepHistoryWalletSet(configuredWallets: TrackedWallet[], discoveredScores: WalletScore[]): Set<string> {

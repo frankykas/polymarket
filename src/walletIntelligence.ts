@@ -30,6 +30,10 @@ export function applyShadowPerformanceToScore(score: WalletScore, performance?: 
   if (performance.fallback / performance.simulated > 0.75) flags.push("SHADOW_MOSTLY_FALLBACK_MARKS");
   if (impact <= -6) flags.push("SHADOW_COPY_UNDERPERFORMS");
   if (impact >= 6) flags.push("SHADOW_COPY_OUTPERFORMS");
+  if (performance.simulated >= 20 && performance.pnl > 0 && performance.realized > 0 && performance.fallback / performance.simulated <= 0.6) {
+    flags.push("SHADOW_PROVEN_COPYABLE");
+  }
+  if (performance.simulated >= 20 && performance.pnl <= 0) flags.push("SHADOW_NEGATIVE_PNL");
   const adjustedScore = Math.round(clamp(score.score + impact, 0, 100));
   const adjustedCopyability = score.copyabilityScore === undefined
     ? undefined
@@ -39,7 +43,7 @@ export function applyShadowPerformanceToScore(score: WalletScore, performance?: 
     score: adjustedScore,
     copyabilityScore: adjustedCopyability,
     reliability: adjustedScore >= 70 && (score.sampleConfidence ?? 0) >= 0.65 ? "HIGH" : adjustedScore >= 55 ? "MEDIUM" : "LOW",
-    flags,
+    flags: uniqueFlags(flags),
     shadowTradeCount: performance.total,
     shadowSimulated: performance.simulated,
     shadowRealized: performance.realized,
@@ -65,7 +69,7 @@ export function applyPaperPerformanceToScore(score: WalletScore, performance?: P
     score: adjustedScore,
     copyabilityScore: adjustedCopyability,
     reliability: adjustedScore >= 70 && (score.sampleConfidence ?? 0) >= 0.65 ? "HIGH" : adjustedScore >= 55 ? "MEDIUM" : "LOW",
-    flags
+    flags: uniqueFlags(flags)
   };
 }
 
@@ -423,6 +427,10 @@ export function calculateShadowScoreImpact(performance: ShadowWalletPerformance)
   // Asymmetric: demote wallets that lose money when copied more than we promote winners.
   const shaped = raw < 0 ? raw * 1.4 : raw;
   return Math.round(clamp(shaped, -28, 20));
+}
+
+function uniqueFlags(flags: string[]): string[] {
+  return [...new Set(flags)];
 }
 
 function analyzeWalletPerformance(trades: WalletTrade[]): WalletPerformance {

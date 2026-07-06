@@ -675,6 +675,18 @@ export interface BotConfig {
   maxDiscoveredWallets: number;
   autoTrackDiscoveredWallets: boolean;
   shadowBacktestEnabled: boolean;
+  /**
+   * Lowest preliminary score that still deserves a shadow-copy audit. This is
+   * intentionally below minWalletScore so shadow evidence can discover
+   * copyable wallets that raw reputation underrates.
+   */
+  shadowCandidateMinScore?: number;
+  /** Minimum simulated copy trades before a discovered/probation source can be promoted into live paper signals. */
+  minShadowTradesForPromotion?: number;
+  /** Minimum shadow PNL required before a discovered/probation source can be promoted into live paper signals. */
+  minShadowPnlForPromotion?: number;
+  /** Require shadow proof for auto-discovered/probation wallets before they can create trade candidates. */
+  requireShadowProofForDiscovered?: boolean;
   shadowCopyDelayMs: number;
   shadowMaxEntryPriceMovePct: number;
   shadowPositionSize: number;

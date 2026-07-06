@@ -68,6 +68,10 @@ const config: BotConfig = {
   maxDiscoveredWallets: 25,
   autoTrackDiscoveredWallets: true,
   shadowBacktestEnabled: true,
+  shadowCandidateMinScore: 35,
+  minShadowTradesForPromotion: 20,
+  minShadowPnlForPromotion: 0,
+  requireShadowProofForDiscovered: true,
   shadowCopyDelayMs: 30000,
   shadowMaxEntryPriceMovePct: 0.05,
   shadowPositionSize: 5,
@@ -441,6 +445,55 @@ test("signal generation keeps extreme-priced copies off the trade candidate path
   assert.equal(longshot.decision, "WATCHLIST");
 });
 
+test("signal generation requires shadow proof for discovered probation wallets", () => {
+  const trade: WalletTrade = {
+    wallet: "0xprobation", marketId: "m1", tokenId: "yes-token", outcome: "YES", side: "BUY", price: 0.52, size: 10, timestamp: Date.now()
+  };
+  const unproven: WalletScore = {
+    wallet: "0xprobation",
+    label: "discovered",
+    score: 100,
+    copyabilityScore: 100,
+    shadowSimulated: 25,
+    shadowRealized: 10,
+    shadowPnl: 12,
+    tradeCount: 40,
+    recentTradeCount: 10,
+    reliability: "HIGH",
+    flags: [],
+    updatedAt: Date.now()
+  };
+  assert.equal(generateSignals(market, [book], [trade], [unproven], config).length, 0);
+
+  const proven: WalletScore = {
+    ...unproven,
+    flags: ["SHADOW_PROVEN_COPYABLE"]
+  };
+  const signals = generateSignals(market, [book], [trade], [proven], config);
+  assert.equal(signals.length, 1);
+  assert.equal(signals[0].decision, "TRADE_CANDIDATE");
+});
+
+test("signal generation blocks wallets that underperform in shadow copy", () => {
+  const trade: WalletTrade = {
+    wallet: "0xbadcopy", marketId: "m1", tokenId: "yes-token", outcome: "YES", side: "BUY", price: 0.52, size: 10, timestamp: Date.now()
+  };
+  const badCopy: WalletScore = {
+    wallet: "0xbadcopy",
+    score: 91,
+    copyabilityScore: 91,
+    shadowSimulated: 60,
+    shadowRealized: 20,
+    shadowPnl: -30,
+    tradeCount: 300,
+    recentTradeCount: 20,
+    reliability: "HIGH",
+    flags: ["SHADOW_COPY_UNDERPERFORMS", "SHADOW_NEGATIVE_PNL"],
+    updatedAt: Date.now()
+  };
+  assert.equal(generateSignals(market, [book], [trade], [badCopy], config).length, 0);
+});
+
 test("shadow scoring demotes wallets that lose money when copied", () => {
   const winner = applyShadowPerformanceToScore({
     wallet: "0xwin", score: 65, copyabilityScore: 65, tradeCount: 40, recentTradeCount: 6,
@@ -459,6 +512,8 @@ test("shadow scoring demotes wallets that lose money when copied", () => {
   // The high-volume whale that copies badly should fall below the mid-tier copier.
   assert.ok((loser.shadowScoreImpact ?? 0) < 0);
   assert.ok(loser.flags.includes("SHADOW_COPY_UNDERPERFORMS"));
+  assert.ok(loser.flags.includes("SHADOW_NEGATIVE_PNL"));
+  assert.ok(winner.flags.includes("SHADOW_PROVEN_COPYABLE"));
   assert.ok(loser.score < winner.score + 15);
   assert.ok(winner.score > 65);
 });
