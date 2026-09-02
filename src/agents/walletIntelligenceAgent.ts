@@ -6,6 +6,29 @@ export class WalletIntelligenceAgent {
   constructor(private events?: AgentEventWriter) {}
 
   reviewSignal(signal: TradeSignal, scores: WalletScore[], trades: WalletTrade[], now = Date.now()): WalletIntelligenceReport {
+    if (signal.signalOrigin === "INDEPENDENT_MODEL") {
+      const uncertainty = Math.max(0, Math.min(1, signal.modelUncertainty ?? 1));
+      const agreement = Math.max(0, Math.min(1, signal.modelAgreement ?? 0));
+      const edge = Math.max(0, signal.probabilityEdge ?? 0);
+      const score = clampScore(55 + agreement * 20 + edge * 150 - uncertainty * 20);
+      const report: WalletIntelligenceReport = {
+        id: randomId("walletintel"), signalId: signal.id, marketId: signal.marketId,
+        state: "MODEL_INDEPENDENT", score, alignedWallets: 0, independentSourceCount: 0,
+        clusterPenalty: 0, avgCopyabilityScore: 0, avgSampleConfidence: signal.forecastSampleSize ? Math.min(1, signal.forecastSampleSize / 100) : 0,
+        confidenceModifier: Math.max(-5, Math.min(8, Math.round((score - 60) / 5))),
+        reasons: [
+          "independent model signal does not require an aligned wallet",
+          `model agreement ${(agreement * 100).toFixed(1)}%`,
+          `model edge ${(edge * 100).toFixed(1)} percentage points`
+        ],
+        createdAt: now
+      };
+      this.events?.write({
+        type: "wallet_intelligence.review_completed", agent: "Wallet Intelligence Agent", visibility: "PUBLIC",
+        message: `Wallet Intelligence verified model-independent origin (${score}/100).`, payload: report
+      });
+      return report;
+    }
     const alignedWalletSet = new Set(signal.alignedWallets.map((wallet) => wallet.toLowerCase()));
     const alignedScores = scores.filter((score) => alignedWalletSet.has(score.wallet.toLowerCase()));
     const alignedTrades = trades.filter((trade) =>
@@ -20,6 +43,7 @@ export class WalletIntelligenceAgent {
     const avgCopyabilityScore = average(alignedScores.map((score) => score.copyabilityScore ?? score.score));
     const avgSampleConfidence = average(alignedScores.map((score) => score.sampleConfidence ?? 0));
     const lowEvidence = alignedScores.some((score) => score.reliability === "LOW" || (score.sampleConfidence ?? 0) < 0.25);
+    const researchNonCopyable = alignedScores.some((score) => score.flags.includes("RESEARCH_DO_NOT_COPY"));
     const tightTiming = timingSpreadMs !== undefined && timingSpreadMs < 90_000 && alignedWalletSet.size > 1;
     const clusterPenalty = tightTiming ? Math.min(35, 10 + alignedWalletSet.size * 5) : 0;
     const independentSourceCount = Math.max(0, alignedWalletSet.size - (tightTiming ? 1 : 0));
@@ -28,6 +52,7 @@ export class WalletIntelligenceAgent {
     if (alignedWalletSet.size === 0) reasons.push("no aligned wallets attached to signal");
     if (tightTiming) reasons.push("aligned buys arrived in a tight time cluster");
     if (lowEvidence) reasons.push("one or more aligned sources has low sample confidence");
+    if (researchNonCopyable) reasons.push("wallet research identified maker, paired-outcome, or unwind behavior that is not directionally copyable");
     if (independentSourceCount >= 2) reasons.push(`${independentSourceCount} independent source(s) remain after clustering checks`);
     if (avgCopyabilityScore > 0) reasons.push(`average copyability ${avgCopyabilityScore.toFixed(0)}/100`);
 
@@ -36,11 +61,13 @@ export class WalletIntelligenceAgent {
       avgSampleConfidence * 25 +
       independentSourceCount * 12 -
       clusterPenalty +
+      (researchNonCopyable ? -35 : 0) +
       (signal.confidence >= 80 ? 8 : 0)
     );
     const state: WalletIntelligenceReport["state"] =
       alignedWalletSet.size === 0 ? "UNKNOWN"
-        : lowEvidence && independentSourceCount < 2 ? "WEAK_EVIDENCE"
+        : researchNonCopyable ? "WEAK_EVIDENCE"
+          : lowEvidence && independentSourceCount < 2 ? "WEAK_EVIDENCE"
           : clusterPenalty >= 20 && independentSourceCount < 2 ? "CLUSTERED"
             : "INDEPENDENT";
     const confidenceModifier =

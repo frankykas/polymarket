@@ -6,7 +6,11 @@ import type {
   AgentThroughputPoint,
   AgentHandoffTrace,
   CapitalLockupReport,
+  CleanWalkForwardReport,
   ExposureHealthReport,
+  ExecutionResearchScorecard,
+  ExecutionResearchStrategy,
+  ForwardShadowScorecard,
   OrderHealthTrendPoint,
   PerformanceReport,
   ProfilePerformanceReport,
@@ -21,6 +25,9 @@ import type {
   ShadowCategoryTrendPoint,
   SourceCategorySummary,
   SourceScorePoint,
+  StrategyBacktestResult,
+  StrategyHypothesis,
+  WeatherOpportunity,
   WalletDegradationReport,
 } from "../types.js";
 
@@ -36,11 +43,39 @@ export interface DashboardReadModel {
     equity: number;
   };
   performance: PerformanceReport;
+  truth: {
+    actualPaperPnl: number;
+    actualPaperRealizedPnl: number;
+    cleanWalkForward: CleanWalkForwardReport;
+    macroCpi: {
+      stage: "RESEARCH" | "EXPERIMENTAL_PAPER" | "STANDARD_PAPER" | "LIVE_READY";
+      walkForwardPassed: boolean;
+      cleanForwardPositive: boolean;
+      researchPromotionEligible: boolean;
+      experimentalPaperEligible: boolean;
+      standardPaperEligible: boolean;
+      liveReady: boolean;
+      promotionEligible: boolean;
+      reason: string;
+    };
+    executionResearch: Partial<Record<ExecutionResearchStrategy, ExecutionResearchScorecard>>;
+    livePromotionGate: {
+      passed: boolean;
+      reason: string;
+      selectedStrategyId?: string;
+      selectedCluster?: string;
+      selectedStage?: "RESEARCH" | "FORWARD_VALIDATION" | "EXPERIMENTAL_PAPER" | "STANDARD_PAPER";
+    };
+    immutableSnapshotAt?: number;
+    immutableSnapshotDate?: string;
+    rawShadowResearchOnly: true;
+  };
   orderHealth: OrderHealthReport;
   exposure: ExposureHealthReport;
   capitalLockup: CapitalLockupReport;
   paperFeedback: PaperSourceFeedbackSummary;
   shadow: ShadowBacktestReport;
+  forwardShadow: ForwardShadowScorecard;
   tradeLedger: PaperTradeLedgerEntry[];
   trends: {
     shadowCategories: ShadowCategoryTrendPoint[];
@@ -119,6 +154,9 @@ export interface AdminDashboardReadModel {
   scoreHistory: SourceScorePoint[];
   risk: RiskEventSummary[];
   handoffTrace: AgentHandoffTrace[];
+  strategyHypotheses: StrategyHypothesis[];
+  strategyBacktests: StrategyBacktestResult[];
+  weatherOpportunities: WeatherOpportunity[];
 }
 
 export interface PublicTrackerReadModel {
@@ -170,6 +208,19 @@ export function buildDashboardReadModel(
   const closedPositionRows = db.getClosedPositions(20);
   const recentSignals = db.getRecentSignals(12);
   const performance = publicPerformance(db.getPerformanceReport());
+  const dailySnapshot = db.getLatestDailyScorecardSnapshot();
+  const emptyWalkForward: CleanWalkForwardReport = {
+    calculatedAt: 0,
+    wallets: 0,
+    markets: 0,
+    trainRows: 0,
+    testRows: 0,
+    promotedSources: 0,
+    gatePassingOos: { executable: 0, pnl: 0, avgReturnPct: 0, winRate: 0, sourceSellRatio: 0 },
+    allTestSources: { executable: 0, pnl: 0, avgReturnPct: 0, winRate: 0, sourceSellRatio: 0 },
+    passed: false,
+    reason: "awaiting first immutable daily scorecard"
+  };
   const marketIds = [
     ...openPositions.map((position) => position.marketId),
     ...closedPositionRows.map((position) => position.marketId),
@@ -221,6 +272,30 @@ export function buildDashboardReadModel(
       equity: bankroll + performance.totalPnl
     },
     performance,
+    truth: {
+      actualPaperPnl: performance.totalPnl,
+      actualPaperRealizedPnl: performance.realizedPnl,
+      cleanWalkForward: dailySnapshot?.scorecard.cleanWalkForward ?? emptyWalkForward,
+      macroCpi: dailySnapshot?.scorecard.primaryResearch ?? {
+        stage: "RESEARCH",
+        walkForwardPassed: false,
+        cleanForwardPositive: false,
+        researchPromotionEligible: false,
+        experimentalPaperEligible: false,
+        standardPaperEligible: false,
+        liveReady: false,
+        promotionEligible: false,
+        reason: "awaiting first immutable daily scorecard"
+      },
+      executionResearch: dailySnapshot?.scorecard.executionResearch ?? {},
+      livePromotionGate: dailySnapshot?.scorecard.livePromotionGate ?? {
+        passed: false,
+        reason: "awaiting first immutable daily scorecard"
+      },
+      immutableSnapshotAt: dailySnapshot?.createdAt,
+      immutableSnapshotDate: dailySnapshot?.snapshotDate,
+      rawShadowResearchOnly: true
+    },
     orderHealth: db.getOrderHealthReport(minPositionSize),
     exposure: db.getExposureHealthReport(maxOpenExposure, bankroll, reserveCashPct),
     capitalLockup: db.getCapitalLockupReport({
@@ -231,6 +306,7 @@ export function buildDashboardReadModel(
     }),
     paperFeedback: db.getPaperSourceFeedbackSummary(),
     shadow: db.getShadowBacktestReport(),
+    forwardShadow: db.getForwardShadowScorecard(performance.performanceStartAt ?? 0),
     tradeLedger: db.getPaperTradeLedger(bankroll, 30),
     trends: {
       shadowCategories: db.getShadowCategoryTrend(21),
@@ -293,6 +369,9 @@ export function buildAdminDashboardReadModel(db: BotDatabase): AdminDashboardRea
     })),
     scoreHistory: db.getSourceScoreHistory(120),
     risk: db.getRiskEventSummary(20),
+    strategyHypotheses: db.getStrategyHypotheses(),
+    strategyBacktests: db.getLatestStrategyBacktests(),
+    weatherOpportunities: db.getWeatherOpportunities(100),
     handoffTrace: adminAgentEvents(db.getRecentAgentEvents(80)).map((event) => ({
       id: event.id,
       type: event.type,

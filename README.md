@@ -1,6 +1,6 @@
-# Polymarket Wallet-Following Paper Bot
+# StratiFi Polymarket Strategy Lab
 
-TypeScript MVP for a Polymarket wallet-following paper bot. It tracks configured wallets, scans public Polymarket data, applies market-quality and risk rules, simulates limit-order fills, logs to SQLite, and can optionally send Telegram alerts.
+TypeScript research and paper-execution system for discovering and validating Polymarket strategies. Wallets are hypothesis leads, not trade instructions; only independently tested and prospectively validated strategy lanes may reach paper execution.
 
 No live trading code path is enabled in this version.
 
@@ -28,6 +28,11 @@ npm run scan       # one-shot scan, no paper orders
 npm run dev        # continuous paper bot loop
 npm run dashboard  # local StratiFi web dashboard
 npm run performance # local paper PnL report
+npm run execution:forward # prospective maker/arbitrage/latency validation scorecards
+npm run execution:cross-sensitivity # training/untouched-test replay of crypto latency arms
+npm run weather:tournament # fixed-horizon forward-only weather strategy tournament
+npm run macro:collect # append the current official CPI nowcast as a point-in-time vintage
+npm run profitability:audit # authoritative cross-strategy profitability report
 npm run export-ledger # export paper trades to data/paper-trade-ledger.csv
 npm run cleanup:daily:dry # preview safe daily SQLite/generated-file cleanup
 npm run cleanup:daily # prune bulky history while preserving current bot state
@@ -37,7 +42,25 @@ npm run typecheck  # TypeScript checks
 
 Run one `npm run dev` loop per SQLite database. Running multiple bot loops against the same `BOT_DB_PATH` can create SQLite write contention. The dashboard can run alongside the bot, but if you see `database is locked`, stop extra bot/dashboard processes and restart one clean bot loop.
 
+Market scoring uses bounded concurrency (`signalMarketConcurrency`, default 6). Upstream history/forecast failures are cooled down for ten minutes so one unavailable research source cannot serialize or stall the rest of a scan.
+
 Paper trades are persisted in SQLite and also exported to `data/paper-trade-ledger.csv` after paper entries/exits. Rebuild the CSV anytime with `npm run export-ledger`. Override the file path with `PAPER_TRADE_LEDGER_PATH`.
+
+## Execution Research
+
+The optional research-only execution lab can record Polymarket depth/trade events and BTC/ETH Binance reference ticks to immutable process gzip JSONL segments under `data/market-tape`. Its models include delayed-entry crypto reaction trades, post-latency binary-pair execution with one-leg risk, and inventory-aware maker quoting with queue position, quote skew, stale requotes, persisted inventory, and forced-hedge limits. Rewards and rebates are excluded from base P&L. These engines never place paper or live orders. It is disabled in the current production policy because its frozen forward maker and latency arms lost money and the large tape workload delayed the primary weather evidence loop; prior results remain immutable and reportable.
+
+Scheduled CPI research blends the historical challenger with the Federal Reserve Bank of Cleveland's current nowcast. Every source observation is stored append-only in `macro_forecast_vintages`; missing historical vintages are never reconstructed. Consequently the nowcast model remains research-only until its own frozen forward selections resolve profitably and satisfy validation gates.
+
+Install `pmarke-research.service` and `pmarke-research.timer` from `deploy/systemd` to collect CPI vintages and persist a bounded six-hour crypto-latency sensitivity report each day. Sensitivity reports are model-selection evidence only and cannot enter a promotion scorecard.
+
+Candidates and results are insert-only in SQLite. `npm run execution:forward` reports every economically exposed outcome, including hedge misses, after the frozen policy start and blocks promotion until the configured sample, distinct-market, return, and win-rate gates all pass. This subsystem has no order-placement path.
+
+The weather strategy tournament is also research-only. It freezes one append-only observation per validated station-day and preregistered arm at 24h, 12h, and 6h horizons. The incumbent NO policy is compared with expanded-NO and two-sided challengers using the executable $10 ask VWAP, fees, market-probability Brier benchmark, a 30-resolution screen, and a 100-resolution final decision. Tournament rows never enter paper-policy promotion evidence or place paper/live orders.
+
+Upcoming weather ladders use a dedicated Gamma event search in addition to the global volume-ranked market scan. Complete events from already validated resolution stations are admitted first, followed by a bounded number of new-station events. This prevents newly listed, low-volume weather markets from being omitted before their fixed tournament horizons.
+
+Weather paper entries freeze their execution policy into the signal. The current `weather-station-skill-v5-resolution-hold` epoch holds each accepted position until the market publishes a winning outcome, then settles it at 1 or 0. Interim book moves, generic stop losses, take profits, source exits, and maximum-hold timers cannot alter those positions. Earlier epochs remain queryable and are excluded from v5 promotion evidence.
 
 ## Daily Cleanup
 
@@ -51,7 +74,11 @@ npm run cleanup:daily
 systemctl start pmarke-bot
 ```
 
-The cleanup preserves current operational state such as tracked wallets, discovered wallet summaries, latest wallet scores, markets, open/closed positions, and config. It prunes bulky history tables such as wallet trades, order-book snapshots, agent/log/risk history, source-score snapshots, shadow simulations, paper fills, and paper orders. Use `npm run cleanup:daily -- --keep-days 2 --keep-rows 5000` to keep more history, and add `-- --vacuum` only when the VPS has enough free disk space for SQLite compaction.
+The cleanup preserves the economic ledger (paper orders, fills, source attribution, exits), immutable forward selections, execution results, and post-epoch wallet observations. It prunes replaceable telemetry and pre-epoch bulk history. Use `npm run cleanup:daily -- --keep-days 2 --keep-rows 5000` to keep more telemetry, and add `-- --vacuum` only when the VPS has enough free disk space for SQLite compaction.
+
+See `FULL_APP_PROFITABILITY_AUDIT_2026-08-16.md` for the current evidence, agent audit, and restructuring decision. Historical or raw shadow profit is never sufficient for promotion.
+
+Run `npm run launch:readiness` for the unified weather/CPI/crypto launch gate and its exact next milestone. The gate is strategy-agnostic, but it remains hard-blocked until one frozen strategy passes forward settlement and paper execution and an authenticated live-order adapter has received a separate security review. See `LIVE_LAUNCH_ROADMAP_2026-08-17.md` for the complete promotion and canary sequence.
 
 On the VPS, install the daily automatic cleanup timer:
 

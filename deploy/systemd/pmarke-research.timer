@@ -1,0 +1,11 @@
+[Unit]
+Description=Run PMarke point-in-time research collection every six hours
+
+[Timer]
+OnCalendar=*-*-* 00,06,12,18:30:00 UTC
+Persistent=true
+RandomizedDelaySec=10m
+Unit=pmarke-research.service
+
+[Install]
+WantedBy=timers.target

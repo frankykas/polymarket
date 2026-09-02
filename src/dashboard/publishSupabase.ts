@@ -9,7 +9,7 @@ if (!env.supabaseUrl || !env.supabaseServiceRoleKey) {
   throw new Error("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required to publish dashboard snapshots.");
 }
 
-const db = new BotDatabase(env.dbPath);
+const db = new BotDatabase(env.dbPath, config.performanceStartAt);
 
 try {
   const payload = buildDashboardReadModel(

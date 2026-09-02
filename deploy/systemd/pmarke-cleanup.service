@@ -7,5 +7,6 @@ Wants=network-online.target
 Type=oneshot
 WorkingDirectory=/opt/pmarke
 ExecStartPre=-/usr/bin/systemctl stop pmarke-bot
+ExecStart=/usr/bin/npm run scorecard:daily
 ExecStart=/usr/bin/npm run cleanup:daily -- --keep-days 1 --keep-rows 3000
 ExecStartPost=/usr/bin/systemctl start pmarke-bot

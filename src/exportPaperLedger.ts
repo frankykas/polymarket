@@ -4,7 +4,7 @@ import { exportPaperTradeLedgerFile } from "./paperTradeLedgerFile.js";
 
 const env = loadRuntimeEnv();
 const config = loadBotConfig();
-const db = new BotDatabase(env.dbPath);
+const db = new BotDatabase(env.dbPath, config.performanceStartAt);
 
 try {
   const result = exportPaperTradeLedgerFile(db, config.bankroll);

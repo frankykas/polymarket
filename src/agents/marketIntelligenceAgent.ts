@@ -37,19 +37,30 @@ export class MarketIntelligenceAgent {
       .filter((score): score is WalletScore => score !== undefined);
     const avgSourceScore = alignedScores.length
       ? alignedScores.reduce((sum, score) => sum + score.score, 0) / alignedScores.length
-      : 0;
+      : input.signal.signalOrigin === "INDEPENDENT_MODEL"
+        ? Math.min(100, 55 + Math.max(0, input.signal.probabilityEdge ?? 0) * 200)
+        : 0;
     const avgCategoryImpact = alignedScores.length
       ? alignedScores.reduce((sum, score) => sum + (score.shadowCategoryImpacts?.[category] ?? 0), 0) / alignedScores.length
       : 0;
     const hasUsableBook = input.books.some((book) => book.bestBid !== undefined && book.bestAsk !== undefined);
+    const researchNonCopyable = alignedScores.some((score) => score.flags.includes("RESEARCH_DO_NOT_COPY"));
 
     const privateNotes: string[] = [];
     let contextScore = 45;
     contextScore += Math.min(20, input.market.liquidity / 500);
     contextScore += Math.min(12, input.market.volume24h / 1_000);
     contextScore += avgSourceScore * 0.18;
+    if (input.signal.signalOrigin === "INDEPENDENT_MODEL") {
+      contextScore += Math.min(12, Math.max(0, input.signal.expectedValuePct ?? 0) * 30);
+      privateNotes.push("signal originates from an independent fair-value model rather than wallet copying");
+    }
     contextScore += avgCategoryImpact;
     if (input.walletIntelligence) contextScore += input.walletIntelligence.confidenceModifier;
+    if (researchNonCopyable) {
+      contextScore -= 20;
+      privateNotes.push("wallet research classified an aligned source as maker, paired-outcome, or unwind behavior rather than directional edge");
+    }
     if (signalFreshness === "FRESH") contextScore += 8;
     if (signalFreshness === "STALE") {
       contextScore -= 18;
@@ -115,7 +126,8 @@ function detectCatalysts(text: string): string[] {
     ["macro", ["fed", "cpi", "inflation", "rates", "jobs", "fomc"]],
     ["crypto", ["bitcoin", "btc", "ethereum", "eth", "solana", "binance", "etf"]],
     ["earnings", ["earnings", "revenue", "guidance", "stock"]],
-    ["sports", ["match", "game", "final", "playoff", "tournament"]]
+    ["sports", ["match", "game", "final", "playoff", "tournament"]],
+    ["weather", ["temperature", "weather", "rain", "snow", "hurricane"]]
   ];
   for (const [tag, words] of groups) {
     if (words.some((word) => text.includes(word))) tags.push(tag);

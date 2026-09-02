@@ -56,6 +56,24 @@ export class RiskMitigationAgent {
       return decision;
     }
 
+    const openProfileTrades = this.db.getOpenPositions().filter((position) => position.profile === profile.name).length;
+    const maxOpenTrades = signal.signalOrigin === "INDEPENDENT_MODEL"
+      ? Math.max(profile.maxOpenTrades, Math.floor(this.config.independentModelMaxOpenTrades ?? profile.maxOpenTrades))
+      : profile.maxOpenTrades;
+    if (openProfileTrades >= maxOpenTrades) {
+      const decision: RiskDecision = {
+        decision: "REJECT",
+        positionSize: 0,
+        reason: `${profile.name} open-trade cap reached (${openProfileTrades}/${maxOpenTrades})`,
+        profile: profile.name,
+        confidence: signal.confidence,
+        riskState,
+        shadow: true
+      };
+      this.persist(signal, decision, quality, state, context);
+      return decision;
+    }
+
     const profileConfig: BotConfig = {
       ...this.config,
       minSignalConfidence: profile.minConfidence,
@@ -83,9 +101,13 @@ export class RiskMitigationAgent {
         return rejected;
       }
       if (riskState === "WARNING" || quality.score < 70 || context.microstructure.score < 70) {
-        decision.decision = "REDUCE_SIZE";
-        decision.positionSize = Math.min(decision.positionSize, this.config.minPositionSize);
-        decision.reason = `reduced for ${riskState.toLowerCase()} market quality: ${decision.reason}`;
+        if (signal.signalOrigin === "INDEPENDENT_MODEL") {
+          decision.decision = "REDUCE_SIZE";
+          decision.positionSize = Math.max(this.config.minPositionSize, Math.round(decision.positionSize * 0.5 * 100) / 100);
+          decision.reason = `reduced for ${riskState.toLowerCase()} market quality: ${decision.reason}`;
+        } else {
+          decision.reason = `fixed live/shadow parity size retained under ${riskState.toLowerCase()} market quality: ${decision.reason}`;
+        }
       }
     }
     this.persist(signal, decision, quality, state, context);
@@ -126,7 +148,16 @@ export class RiskMitigationAgent {
         openExposure: state.openExposure,
         dailyPnl: state.dailyPnl,
         lossStreak: state.lossStreak,
-        tradesToday: state.tradesToday
+        tradesToday: state.tradesToday,
+        sizingMethod: decision.sizingMethod,
+        fullKellyFraction: decision.fullKellyFraction,
+        fractionalKelly: decision.fractionalKelly,
+        liquidityCap: decision.liquidityCap,
+        exposureCap: decision.exposureCap,
+        drawdownMultiplier: decision.drawdownMultiplier,
+        fairProbability: signal.fairProbability,
+        marketProbability: signal.marketProbability,
+        expectedValuePct: signal.expectedValuePct
       }
     });
     this.events.write({

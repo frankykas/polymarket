@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, rmSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { loadRuntimeEnv } from "../src/config.js";
+import { loadBotConfig, loadRuntimeEnv } from "../src/config.js";
 
 interface CleanupOptions {
   apply: boolean;
@@ -16,30 +16,45 @@ interface TableRule {
   keepRows: number;
   keepDays?: number;
   reason: string;
+  /** Rows that are promotion/audit evidence and must never be aged out. */
+  preserveWhere?: string;
 }
 
 const options = parseOptions(process.argv.slice(2));
 const env = loadRuntimeEnv();
+const config = loadBotConfig();
 const dbPath = resolve(env.dbPath);
 const dataDir = resolve(dirname(dbPath));
+const performanceStartAt = Math.max(0, config.performanceStartAt ?? 0);
 
 const tableRules: TableRule[] = [
   { table: "orderbook_snapshots", column: "created_at", keepRows: Math.min(options.keepRows, 1000), keepDays: options.keepDays, reason: "high-volume market microstructure snapshots" },
   { table: "bot_run_logs", column: "created_at", keepRows: Math.min(options.keepRows, 800), keepDays: options.keepDays, reason: "runtime log history" },
   { table: "agent_events", column: "created_at", keepRows: Math.min(options.keepRows, 800), keepDays: options.keepDays, reason: "agent narration/event history" },
-  { table: "risk_events", column: "created_at", keepRows: Math.min(options.keepRows, 1000), keepDays: options.keepDays, reason: "risk decision history" },
-  { table: "signals", column: "created_at", keepRows: Math.min(options.keepRows, 1000), keepDays: options.keepDays, reason: "signal history" },
+  { table: "risk_events", column: "created_at", keepRows: Math.min(options.keepRows, 1000), keepDays: options.keepDays, reason: "non-economic risk decision history", preserveWhere: "signal_id IN (SELECT signal_id FROM paper_orders WHERE side = 'BUY')" },
+  {
+    table: "signals", column: "created_at", keepRows: Math.min(options.keepRows, 1000), keepDays: options.keepDays,
+    reason: "unselected signal/watchlist history",
+    preserveWhere: `id IN (SELECT signal_id FROM paper_orders WHERE side = 'BUY')
+      OR id IN (SELECT signal_id FROM weather_opportunities WHERE signal_id IS NOT NULL AND status IN ('SELECTED', 'RESOLVED'))
+      OR id IN (SELECT signal_id FROM strategy_opportunities WHERE signal_id IS NOT NULL AND status IN ('RESEARCH_SELECTED', 'SELECTED', 'RESOLVED'))`
+  },
   { table: "source_score_snapshots", column: "created_at", keepRows: Math.min(options.keepRows, 1200), keepDays: options.keepDays, reason: "source score time series" },
-  { table: "shadow_trades", column: "created_at", keepRows: Math.min(options.keepRows, 2500), keepDays: options.keepDays, reason: "shadow simulation history" },
-  { table: "wallet_trades", column: "timestamp", keepRows: Math.min(options.keepRows, 3000), keepDays: options.keepDays, reason: "source wallet raw trade history" },
-  { table: "paper_source_feedback", column: "created_at", keepRows: Math.min(options.keepRows, 800), keepDays: options.keepDays, reason: "paper source feedback history" },
-  { table: "paper_fills", column: "timestamp", keepRows: Math.min(options.keepRows, 1500), keepDays: options.keepDays, reason: "paper fill history" },
-  { table: "paper_orders", column: "created_at", keepRows: Math.min(options.keepRows, 1500), keepDays: options.keepDays, reason: "paper order history" },
-  { table: "exit_events", column: "created_at", keepRows: Math.min(options.keepRows, 800), keepDays: options.keepDays, reason: "position exit decision history" }
+  { table: "shadow_trades", column: "created_at", keepRows: Math.min(options.keepRows, 2500), keepDays: options.keepDays, reason: "shadow simulation history", preserveWhere: "forward_eligible = 1" },
+  {
+    table: "wallet_trades", column: "timestamp", keepRows: Math.min(options.keepRows, 3000), keepDays: options.keepDays,
+    reason: "pre-epoch source-wallet history",
+    preserveWhere: performanceStartAt > 0 ? `timestamp >= ${performanceStartAt}` : undefined
+  },
+  // Orders, fills, exit decisions, and paper attribution are the economic
+  // ledger. They are intentionally absent from retention rules: deleting any
+  // of them makes strategy/category P&L and execution parity unreproducible.
+  { table: "weather_opportunities", column: "created_at", keepRows: Math.min(options.keepRows, 2500), keepDays: options.keepDays, reason: "independent weather opportunity history", preserveWhere: "status IN ('SELECTED', 'RESOLVED')" },
+  { table: "strategy_opportunities", column: "created_at", keepRows: Math.min(options.keepRows, 2500), keepDays: options.keepDays, reason: "independent strategy opportunity history", preserveWhere: "status IN ('SELECTED', 'RESOLVED')" },
+  { table: "strategy_backtests", column: "created_at", keepRows: Math.min(options.keepRows, 1000), keepDays: Math.max(options.keepDays, 30), reason: "independent strategy validation history" }
 ];
 
 const generatedFilePatterns = [
-  /^polymarket-paper-bot\.dev\.pid$/,
   /^paper-trade-ledger\..*\.csv$/,
   /^dashboard-snapshot\..*\.json$/,
   /^health\..*\.json$/,
@@ -62,7 +77,7 @@ try {
 function main(): void {
   console.log(`StratiFi daily cleanup (${options.apply ? "apply" : "dry-run"})`);
   console.log(`DB: ${dbPath}`);
-  console.log(`Policy: keep newest ${options.keepRows} rows max, keep rows from last ${options.keepDays} day(s), preserve current state tables.`);
+  console.log(`Policy: keep newest ${options.keepRows} rows max, keep rows from last ${options.keepDays} day(s), preserve economic and forward evidence.`);
 
   if (!existsSync(dbPath)) {
     console.log("No SQLite DB found. Cleaning generated files only.");
@@ -80,6 +95,7 @@ function main(): void {
       if (options.vacuum) {
         console.log("VACUUM starting. This can take a while and needs free disk space.");
         db.exec("VACUUM");
+        db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
       }
     }
   } finally {
@@ -95,10 +111,12 @@ function cleanupTable(db: DatabaseSync, rule: TableRule): void {
   }
   const before = countRows(db, rule.table);
   const cutoff = Date.now() - rule.keepDays * 24 * 60 * 60 * 1000;
+  const preserveClause = rule.preserveWhere ? `AND NOT (${rule.preserveWhere})` : "";
   const removable = db.prepare(`
     SELECT COUNT(*) as count
     FROM ${rule.table}
     WHERE ${rule.column} < ?
+      ${preserveClause}
       AND rowid NOT IN (
         SELECT rowid FROM ${rule.table}
         ORDER BY ${rule.column} DESC
@@ -111,6 +129,7 @@ function cleanupTable(db: DatabaseSync, rule: TableRule): void {
   db.prepare(`
     DELETE FROM ${rule.table}
     WHERE ${rule.column} < ?
+      ${preserveClause}
       AND rowid NOT IN (
         SELECT rowid FROM ${rule.table}
         ORDER BY ${rule.column} DESC

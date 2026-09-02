@@ -238,7 +238,7 @@ export function indexHtml(): string {
         <div class="section-header">
           <div>
             <h2>Overview</h2>
-            <p>Read-only Polymarket paper trading visibility across wallet intelligence, risk checks, and paper outcomes</p>
+            <p>Read-only truth metrics: actual paper outcomes, clean walk-forward evidence, and gated strategy research</p>
           </div>
           <div class="timestamp" id="lastUpdated">Loading</div>
         </div>
@@ -259,7 +259,7 @@ export function indexHtml(): string {
         <div class="section-header">
           <div>
             <h2>Intelligence Trends</h2>
-            <p>Category shadow-copy drift, paper order flow, and per-agent throughput</p>
+            <p>Research-only shadow drift, paper order flow, and per-agent throughput</p>
           </div>
           <div class="timestamp">Rolling windows</div>
         </div>
@@ -285,7 +285,7 @@ export function indexHtml(): string {
         <div class="section-header">
           <div>
             <h2>Wallet Discovery</h2>
-            <p>Source-quality audit based on copyability, consistency, evidence, category fit, and shadow-copy results</p>
+            <p>Wallets are research leads only; source behavior informs independent strategy hypotheses</p>
           </div>
           <div class="timestamp">Source addresses hidden publicly</div>
         </div>
@@ -308,7 +308,7 @@ export function indexHtml(): string {
         </div>
       </section>
       <section id="signals" class="section">
-        <div class="section-header"><div><h2>Signal Board</h2><p>Tracked wallet activity converted into structured candidates</p></div></div>
+        <div class="section-header"><div><h2>Signal Board</h2><p>Independent strategy candidates plus wallet-derived research watchlists</p></div></div>
         <div class="table-wrap">
           <table>
             <thead><tr><th>Signal</th><th>Market</th><th>Outcome</th><th>Source Strength</th><th>Consistency</th><th>Category</th><th>Activity</th><th>State</th></tr></thead>
@@ -351,7 +351,7 @@ export function indexHtml(): string {
         </div>
       </section>
       <section class="section">
-        <div class="section-header"><div><h2>Category Performance</h2><p>Shadow-copy performance by Polymarket category</p></div></div>
+        <div class="section-header"><div><h2>Research Simulation by Category</h2><p>Raw shadow results are diagnostic only and never count as launch P&amp;L</p></div></div>
         <div class="table-wrap">
           <table>
             <thead><tr><th>Category</th><th>Trades</th><th>Win Rate</th><th>Net ROI</th><th>Realised PNL</th><th>Avg Hold</th><th>Max DD</th></tr></thead>
@@ -443,24 +443,35 @@ export function indexHtml(): string {
     function renderMetrics(data) {
       const p = data.performance;
       const s = data.shadow;
+      const truth = data.truth || {};
+      const walk = truth.cleanWalkForward || { gatePassingOos: { pnl: 0, executable: 0, avgReturnPct: 0 }, passed: false, reason: "awaiting scorecard" };
+      const walkOos = walk.gatePassingOos || { pnl: 0, executable: 0, avgReturnPct: 0 };
+      const macro = truth.macroCpi || { stage: "RESEARCH", walkForwardPassed: false, promotionEligible: false, reason: "awaiting scorecard" };
+      const maker = (truth.executionResearch || {}).MAKER_PAIR || { economicOutcomes: 0, hedgeMisses: 0, pnlUsd: 0, returnPct: 0, promotionEligible: false };
+      const launch = truth.livePromotionGate || { passed: false, reason: "awaiting scorecard" };
+      const leadStrategy = ({ WEATHER_FORECASTING: "Weather", MACRO_RELEASE: "Scheduled CPI", CRYPTO_THRESHOLD: "Crypto Thresholds" })[launch.selectedCluster] || "Unselected";
       const source = data.sourceSummary;
       const capital = data.capital || {};
       const bankroll = capital.startingBankroll || totalBankroll(data);
       const value = capital.equity ?? (bankroll + p.totalPnl);
       const rejectionCount = data.risk.filter((item) => item.decision === "REJECT").reduce((sum, item) => sum + item.count, 0);
       const rows = [
+        ["Actual Paper PnL", fmtUsd.format(truth.actualPaperPnl ?? p.totalPnl), fmtUsd.format(truth.actualPaperRealizedPnl ?? p.realizedPnl) + " realised; current epoch"],
+        ["Retrospective Walk-Forward", fmtUsd.format(walkOos.pnl || 0), (walk.passed ? "PASS" : "FAIL") + " | " + (walkOos.executable || 0) + " source-time OOS trades; not prospective"],
+        ["Lead Strategy", leadStrategy, (launch.selectedStage || macro.stage || "RESEARCH") + "; immutable forward evidence only"],
+        ["Maker Forward PnL", fmtUsd.format(maker.pnlUsd || 0), (maker.promotionEligible ? "PASS" : "BLOCKED") + " | " + (maker.economicOutcomes || 0) + " economic outcomes; " + (maker.hedgeMisses || 0) + " hedge misses"],
+        ["Launch Gate", launch.passed ? "PASS" : "BLOCKED", launch.reason],
         ["Live Since", data.logs.at(-1) ? new Date(data.logs.at(-1).createdAt).toLocaleDateString() : "Pending", "Public stats begin after scans run"],
         ["Data Feed", "Healthy", "Provider details hidden"],
         ["Paper Capital", fmtUsd.format(bankroll), "Configured simulation bankroll"],
         ["Portfolio Value", fmtUsd.format(value), tonePct(p.totalPnl / bankroll) + " paper Net ROI"],
         ["Available Cash", fmtUsd.format(capital.availableCash ?? bankroll), fmtUsd.format(capital.deployedCost ?? p.openCost ?? 0) + " deployed"],
         ["Open Value", fmtUsd.format(capital.openValue ?? p.openValue ?? 0), "Marked from latest paper position prices"],
-        ["Total PnL", fmtUsd.format(p.totalPnl), p.openPositions + " open / " + p.closedPositions + " closed"],
         ["Win Rate", fmtPct.format(p.winRate || 0), p.wins + " wins / " + p.losses + " losses"],
         ["Signals Found", fmtNum.format(p.signals), p.approvedSignals + " approved for paper orders"],
         ["Risk Failed", fmtNum.format(rejectionCount), "Grouped by risk decision reason"],
-        ["Shadow Trades", fmtNum.format(s.simulated), s.skipped + " skipped"],
-        ["Shadow PnL", fmtUsd.format(s.pnl), tonePct(s.avgReturnPct) + " average return"],
+        ["Raw Shadow Trades", fmtNum.format(s.simulated), "research only; " + s.skipped + " skipped"],
+        ["Raw Shadow PnL", fmtUsd.format(s.pnl), "research only; backfill/selection bias may apply"],
         ["Open Trades", fmtNum.format(p.openPositions), "Overseer monitored"],
         ["Source Quality", source.reliabilityMix, "Average source strength " + fmtNum.format(source.avgCopyabilityScore)]
       ];

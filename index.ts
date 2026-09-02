@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { ClobMarketWebSocket, makeClients } from "./src/clients.js";
+import { ClobMarketWebSocket, CryptoReferenceWebSocket, makeClients } from "./src/clients.js";
 import { loadBotConfig, loadRuntimeEnv, loadTrackedWallets } from "./src/config.js";
 import { BotDatabase } from "./src/db.js";
 import { DecisionCouncil } from "./src/agents/decisionCouncil.js";
@@ -10,9 +10,16 @@ import { OverseerAgent } from "./src/agents/overseerAgent.js";
 import { RiskMitigationAgent } from "./src/agents/riskMitigationAgent.js";
 import { SignalAgent } from "./src/agents/signalAgent.js";
 import { WalletIntelligenceAgent } from "./src/agents/walletIntelligenceAgent.js";
+import { WalletResearchAgent } from "./src/agents/walletResearchAgent.js";
+import { StrategyResearchAgent } from "./src/agents/strategyResearchAgent.js";
+import { WeatherStrategyAgent } from "./src/agents/weatherStrategyAgent.js";
+import { CryptoThresholdStrategyAgent, CRYPTO_THRESHOLD_STRATEGY_ID, parseCryptoThresholdMarket } from "./src/agents/cryptoThresholdStrategyAgent.js";
+import { MacroCpiStrategyAgent, MACRO_CPI_STRATEGY_ID, parseMacroCpiMarket } from "./src/agents/macroCpiStrategyAgent.js";
+import { rankAndDiversifyCandidates, rankAndDiversifyResearchSelections, type CandidateContext } from "./src/candidateRanking.js";
 import {
   PaperExecutionEngine,
   evaluateMarketQuality,
+  inferMarketCategory,
   type RiskState
 } from "./src/engines.js";
 import { AgentEventWriter } from "./src/events/eventWriter.js";
@@ -20,9 +27,16 @@ import { buildStrategyProfiles } from "./src/profiles/profiles.js";
 import { PolymarketProvider } from "./src/providers/polymarketProvider.js";
 import { TelegramAlerts } from "./src/telegram.js";
 import { exportPaperTradeLedgerFile } from "./src/paperTradeLedgerFile.js";
-import type { IntelligenceReviewContext, MarketSnapshot, OrderBookSnapshot, PaperOrder, Position, TradeSignal, WalletScore } from "./src/types.js";
+import { formatPlainLiveReadinessReport } from "./src/liveReadiness.js";
+import { CompressedMarketTapeWriter } from "./src/research/marketTape.js";
+import { includeCompleteNegativeRiskGraphs, includeCompleteThresholdLadderGroups, selectExecutionResearchUniverse, type ExecutionResearchUniverseEntry } from "./src/research/executionUniverse.js";
+import { ExecutionResearchCoordinator } from "./src/research/executionShadowEngines.js";
+import { EXECUTION_RESEARCH_STRATEGIES, executionPolicyVersion } from "./src/research/executionPolicy.js";
+import { mergeMarketStreamBook } from "./src/orderBookDelta.js";
+import { collectWeatherTournamentObservations, WEATHER_TOURNAMENT_VERSION } from "./src/weatherStrategyTournament.js";
+import type { BotConfig, IntelligenceReviewContext, MarketSnapshot, OrderBookSnapshot, PaperOrder, Position, TradeSignal, WalletScore } from "./src/types.js";
 
-type Mode = "dev" | "scan" | "performance" | "shadow";
+type Mode = "dev" | "scan" | "performance" | "shadow" | "readiness";
 const devPidPath = "data/polymarket-paper-bot.dev.pid";
 
 interface CycleResult {
@@ -41,10 +55,15 @@ class PolymarketPaperBot {
   private wallets = loadTrackedWallets();
   private clients = makeClients(this.env);
   private provider = new PolymarketProvider(this.clients);
-  private db = new BotDatabase(this.env.dbPath);
+  private db = new BotDatabase(this.env.dbPath, this.config.performanceStartAt);
   private events = new AgentEventWriter(this.db);
   private profiles = buildStrategyProfiles(this.config);
   private signalAgent = new SignalAgent(this.provider, this.db, this.events, this.config);
+  private walletResearchAgent = new WalletResearchAgent(this.provider, this.db, this.events, this.config);
+  private strategyResearchAgent = new StrategyResearchAgent(this.db, this.events, this.config);
+  private weatherStrategyAgent = new WeatherStrategyAgent(this.db, this.events, this.config);
+  private cryptoThresholdStrategyAgent = new CryptoThresholdStrategyAgent(this.db, this.events, this.config);
+  private macroCpiStrategyAgent = new MacroCpiStrategyAgent(this.db, this.events, this.config);
   private marketIntelligenceAgent = new MarketIntelligenceAgent(this.events);
   private microstructureAgent = new MicrostructureAgent(this.events);
   private walletIntelligenceAgent = new WalletIntelligenceAgent(this.events);
@@ -55,29 +74,38 @@ class PolymarketPaperBot {
   private executor = new PaperExecutionEngine();
   private orderBooks = new Map<string, OrderBookSnapshot>();
   private openOrders = new Map<string, PaperOrder>();
+  private tickSizes = new Map<string, number>();
+  private sourceExitPolls = new Map<string, number>();
   private ws = new ClobMarketWebSocket(this.env.clobWsUrl);
+  private cryptoReferenceWs = new CryptoReferenceWebSocket(this.env.cryptoReferenceWsUrl ?? "wss://data-stream.binance.vision/stream?streams=btcusdt@bookTicker/ethusdt@bookTicker");
+  private marketTape = new CompressedMarketTapeWriter(this.env.researchTapeDir ?? `${dirname(this.env.dbPath)}/market-tape`, this.config.executionResearchBookDepthLevels ?? 10);
+  private executionResearch = new ExecutionResearchCoordinator(
+    this.db,
+    this.config,
+    (tokenId, marketId) => this.provider.getOrderBook(tokenId, marketId)
+  );
   private paused = false;
   private lastResult?: CycleResult;
   private lastCycleAt?: number;
   private lastBankrollSummaryAt = 0;
+  private lastParityScorecardAt = 0;
+  private cycleRunning = false;
+  private lastExecutionResearchSummaryAt = 0;
+  private executionEventGraphCache = new Map<string, { markets: MarketSnapshot[]; refreshedAt: number }>();
 
   async start(mode: Mode): Promise<void> {
     this.db.syncWallets(this.wallets);
     this.ws.onUpdate((update) => {
       const previous = this.orderBooks.get(update.tokenId);
-      this.orderBooks.set(update.tokenId, {
-        tokenId: update.tokenId,
-        marketId: update.marketId ?? previous?.marketId,
-        bids: previous?.bids ?? [],
-        asks: previous?.asks ?? [],
-        bestBid: update.bestBid ?? previous?.bestBid,
-        bestAsk: update.bestAsk ?? previous?.bestAsk,
-        spread: update.spread ?? previous?.spread,
-        depth: update.depth ?? previous?.depth ?? 0,
-        lastTradePrice: update.lastTradePrice ?? previous?.lastTradePrice,
-        timestamp: update.timestamp ?? Date.now(),
-        raw: update.raw ?? previous?.raw
-      });
+      const merged = mergeMarketStreamBook(previous, update);
+      this.orderBooks.set(update.tokenId, merged);
+      const researchMarket = this.executionResearch.marketForToken(update.tokenId);
+      this.marketTape.recordUpdate(update, researchMarket?.id);
+      this.executionResearch.onMarketUpdate(update, merged);
+    });
+    this.cryptoReferenceWs.onTick((tick) => {
+      this.marketTape.recordReference(tick);
+      this.executionResearch.onReferenceTick(tick);
     });
 
     if (mode === "scan") {
@@ -100,8 +128,15 @@ class PolymarketPaperBot {
       return;
     }
 
+    if (mode === "readiness") {
+      console.log(this.plainLiveReadinessReport());
+      this.db.close();
+      return;
+    }
+
     console.log("Starting Polymarket paper bot. No live trading code path is enabled.");
     this.registerDevPid();
+    if (this.config.executionResearchEnabled !== false) this.cryptoReferenceWs.connect();
     this.telegram.startCommandLoop({
       status: () => this.telegramStatus(),
       scan: () => this.telegramScan(),
@@ -134,7 +169,13 @@ class PolymarketPaperBot {
 
   private async runCycle(options: { placePaperOrders: boolean }): Promise<CycleResult> {
     const result: CycleResult = { markets: [], scores: [], discovered: 0, discoveryTrades: 0, signals: 0, approved: 0, rejected: 0 };
+    if (this.cycleRunning) {
+      this.db.log("WARN", "cycle skipped because prior cycle is still running", { placePaperOrders: options.placePaperOrders });
+      return this.lastResult ?? result;
+    }
+    this.cycleRunning = true;
     try {
+      this.expireStaleOrders();
       this.db.log("INFO", "cycle started", { placePaperOrders: options.placePaperOrders });
       this.events.write({
         type: "agent.cycle_started",
@@ -143,13 +184,69 @@ class PolymarketPaperBot {
         message: "Signal Agent started a market scan and source refresh.",
         payload: { placePaperOrders: options.placePaperOrders }
       });
-      const signalState = await this.signalAgent.discoverAndScore(this.wallets);
-      result.markets = signalState.markets;
+      const researchReports = await this.walletResearchAgent.refresh();
+      const signalState = await this.signalAgent.discoverAndScore(this.wallets, researchReports);
+      const hypotheses = this.strategyResearchAgent.refresh(researchReports);
+      this.weatherStrategyAgent.beginCycle();
+      // CPI is the primary research lane because its independent benchmark gap
+      // is currently the closest to passing. Validate it first and keep the
+      // other independent models running as secondary controls.
+      await this.macroCpiStrategyAgent.ensureValidation(
+        signalState.markets,
+        hypotheses.find((hypothesis) => hypothesis.cluster === "MACRO_RELEASE")
+      );
+      await Promise.all([
+        this.weatherStrategyAgent.ensureValidation(
+          signalState.markets,
+          hypotheses.find((hypothesis) => hypothesis.cluster === "WEATHER_FORECASTING")
+        ),
+        this.cryptoThresholdStrategyAgent.ensureValidation(
+          signalState.markets,
+          hypotheses.find((hypothesis) => hypothesis.cluster === "CRYPTO_THRESHOLD")
+        )
+      ]);
+      const freshestSourceWindow = Math.max(
+        this.config.maxSourceBuyAgeMs ?? 0,
+        this.config.paperExplorationMaxSourceBuyAgeMs ?? 0
+      );
+      const freshSourceMarketIds = new Set(signalState.allTrades
+        .filter((trade) => freshestSourceWindow <= 0 || trade.timestamp >= Date.now() - freshestSourceWindow)
+        .map((trade) => trade.marketId));
+      const signalMarkets = signalState.markets.filter((market) =>
+        inferMarketCategory(market) === "weather" ||
+        Boolean(parseCryptoThresholdMarket(market)) ||
+        Boolean(parseMacroCpiMarket(market)) ||
+        freshSourceMarketIds.has(market.id) ||
+        (market.conditionId !== undefined && freshSourceMarketIds.has(market.conditionId))
+      );
+      result.markets = signalMarkets;
       result.discoveryTrades = signalState.discoveryTrades;
       result.discovered = signalState.discovered;
       result.scores = signalState.scores;
+      const baseResearchUniverse = this.config.executionResearchEnabled === false
+        ? []
+        : selectExecutionResearchUniverse(signalState.markets, {
+            limit: this.config.executionResearchUniverseLimit ?? 120,
+            minVolume24h: this.config.executionResearchMinVolume24h ?? 1_000
+          });
+      const completeNegRiskGraphs = await this.loadCompleteNegativeRiskGraphs(baseResearchUniverse);
+      const thresholdCompleteUniverse = includeCompleteThresholdLadderGroups(
+        baseResearchUniverse,
+        signalState.markets,
+        this.config.executionResearchUniverseLimit ?? 120
+      );
+      const researchUniverse = includeCompleteNegativeRiskGraphs(
+        thresholdCompleteUniverse,
+        completeNegRiskGraphs,
+        this.config.executionResearchUniverseLimit ?? 120
+      );
+      this.executionResearch.setUniverse(researchUniverse.map((entry) => entry.market));
+      for (const entry of researchUniverse) this.marketTape.recordMarket(entry.market);
       if (options.placePaperOrders) {
-        const watchedTokenIds = signalState.markets.flatMap((market) => market.clobTokenIds);
+        const watchedTokenIds = [...new Set([
+          ...signalMarkets.flatMap((market) => market.clobTokenIds),
+          ...researchUniverse.flatMap((entry) => entry.market.clobTokenIds)
+        ])];
         this.pruneRuntimeCaches(watchedTokenIds);
         this.ws.connect(watchedTokenIds);
       }
@@ -157,85 +254,225 @@ class PolymarketPaperBot {
         type: "agent.cycle_completed",
         agent: "Signal Agent",
         visibility: "PUBLIC",
-        message: `Signal Agent scanned ${signalState.markets.length} markets and scored ${signalState.scores.length} sources.`,
+        message: `Signal Agent scanned ${signalMarkets.length} actionable markets and scored ${signalState.scores.length} sources.`,
         payload: {
-          markets: signalState.markets.length,
+          markets: signalMarkets.length,
+          fetchedMarkets: signalState.markets.length,
           sources: signalState.scores.length,
           discovered: signalState.discovered,
-          discoveryTrades: signalState.discoveryTrades
+          discoveryTrades: signalState.discoveryTrades,
+          executionResearchMarkets: researchUniverse.length,
+          executionResearchTokens: new Set(researchUniverse.flatMap((entry) => entry.market.clobTokenIds)).size,
+          completeNegRiskGraphsFetched: completeNegRiskGraphs.filter((graph) => graph.length > 0).length,
+          completeNegRiskGraphMarketsFetched: completeNegRiskGraphs.reduce((sum, graph) => sum + graph.length, 0),
+          completeNegRiskMarketsSelected: researchUniverse.filter((entry) => entry.market.eventMarketCount !== undefined).length
         }
       });
       const rejectedReasons = new Map<string, number>();
+      const candidateQueue: CandidateContext[] = [];
+      const researchSelectionQueue: CandidateContext[] = [];
+      const tradesByMarket = new Map<string, typeof signalState.allTrades>();
+      for (const trade of signalState.allTrades) {
+        const grouped = tradesByMarket.get(trade.marketId) ?? [];
+        grouped.push(trade);
+        tradesByMarket.set(trade.marketId, grouped);
+      }
+
+      const marketAnalyses = await mapWithConcurrency(
+        signalMarkets,
+        Math.max(1, Math.floor(this.config.signalMarketConcurrency ?? 6)),
+        async (market) => {
+        const books = await this.getBooksForMarket(market);
+        const relevantTrades = [...new Set([
+          ...(tradesByMarket.get(market.id) ?? []),
+          ...(market.conditionId ? tradesByMarket.get(market.conditionId) ?? [] : [])
+        ])];
+        const walletSignals = this.signalAgent.createSignals({
+          market,
+          books,
+          trades: relevantTrades,
+          scores: signalState.scores
+        });
+        const independentSignals = (await Promise.all([
+          this.weatherStrategyAgent.createSignals(market, books),
+          this.cryptoThresholdStrategyAgent.createSignals(market, books),
+          this.macroCpiStrategyAgent.createSignals(market, books)
+        ])).flat();
+        return { market, books, signals: [...walletSignals, ...independentSignals] };
+      });
+
+      for (const { market, books, signals: marketSignals } of marketAnalyses) {
+        result.signals += marketSignals.length;
+        for (const signal of marketSignals) {
+          if (signal.decision === "TRADE_CANDIDATE") candidateQueue.push({ market, books, signal });
+          if (signal.strategyId === MACRO_CPI_STRATEGY_ID && signal.researchEligible === true) {
+            researchSelectionQueue.push({ market, books, signal });
+          }
+        }
+      }
+
+      if (this.config.weatherTournamentEnabled !== false) {
+        const tournament = collectWeatherTournamentObservations({
+          db: this.db,
+          opportunities: this.weatherStrategyAgent.getCycleOpportunities(),
+          positionSizeUsd: this.config.weatherTournamentPositionSizeUsd ??
+            this.config.independentModelFlatPositionSize ?? this.config.minPositionSize
+        });
+        if (tournament.inserted > 0) {
+          this.events.write({
+            type: "weather_strategy.tournament_observations_frozen",
+            agent: "Strategy Research Agent",
+            visibility: "PUBLIC",
+            message: `Weather tournament froze ${tournament.inserted} new fixed-horizon station-day observation(s).`,
+            payload: {
+              tournamentVersion: WEATHER_TOURNAMENT_VERSION,
+              attempted: tournament.attempted,
+              inserted: tournament.inserted,
+              eligible: tournament.observations.filter((observation) => observation.eligible).length
+            }
+          });
+        }
+        await this.refreshWeatherTournamentSettlements();
+      }
+
+      const researchRanked = rankAndDiversifyResearchSelections(researchSelectionQueue);
+      let newResearchSelections = 0;
+      for (const { signal } of researchRanked.selected) {
+        if (this.db.markStrategyOpportunityResearchSelected(signal.id)) newResearchSelections += 1;
+      }
+      if (researchSelectionQueue.length > 0) {
+        this.events.write({
+          type: "macro_strategy.forward_research_selected",
+          agent: "Strategy Research Agent",
+          visibility: "PUBLIC",
+          message: `CPI research froze ${newResearchSelections} new no-trade forward selection(s); ${researchRanked.skipped.length} correlated duplicate(s) were excluded.`,
+          payload: {
+            qualifiedPredictions: researchSelectionQueue.length,
+            selectedEvents: researchRanked.selected.length,
+            newlyInserted: newResearchSelections,
+            correlatedDuplicatesRemoved: researchRanked.skipped.length,
+            policyVersion: this.config.macroCpiForwardPolicyVersion
+          }
+        });
+      }
+
+      const ranked = rankAndDiversifyCandidates(candidateQueue);
+      for (const skipped of ranked.skipped) {
+        const reason = `lower-ranked duplicate exposure for ${skipped.eventKey}`;
+        result.rejected += 1;
+        rejectedReasons.set(reason, (rejectedReasons.get(reason) ?? 0) + 1);
+        this.db.saveRiskDecision({
+          decision: "REJECT",
+          positionSize: 0,
+          reason,
+          confidence: skipped.signal.confidence,
+          shadow: true
+        }, {
+          signalId: skipped.signal.id,
+          marketId: skipped.signal.marketId,
+          outcome: skipped.signal.outcome,
+          details: { candidatePriority: skipped.priority, strategyEventKey: skipped.eventKey }
+        });
+      }
       this.events.write({
         type: "agent.review_started",
         agent: "Risk Mitigation Agent",
         visibility: "PUBLIC",
-        message: `Risk Agent started reviewing candidates across ${signalState.markets.length} market(s).`,
-        payload: { markets: signalState.markets.length }
+        message: `Risk Agent started reviewing ${ranked.selected.length} globally ranked candidate(s).`,
+        payload: {
+          rawCandidates: candidateQueue.length,
+          selectedCandidates: ranked.selected.length,
+          correlatedDuplicatesRemoved: ranked.skipped.length
+        }
       });
 
-      for (const market of signalState.markets) {
-        const books = await this.getBooksForMarket(market);
-        const microstructure = this.microstructureAgent.review(market, books, this.config);
-        const quality = applyMicrostructureToQuality(evaluateMarketQuality(market, books, this.config), microstructure);
-        const marketSignals = this.signalAgent.createSignals({
-          market,
-          books,
-          trades: signalState.allTrades,
-          scores: signalState.scores
-        });
-        result.signals += marketSignals.length;
-
-        for (const signal of marketSignals) {
-          const walletIntelligence = this.walletIntelligenceAgent.reviewSignal(signal, signalState.scores, signalState.allTrades);
-          const marketIntelligence = this.marketIntelligenceAgent.review({
-            market,
-            signal,
-            books,
-            scores: signalState.scores,
-            walletIntelligence
-          });
-          const state = this.riskState();
-          const debate = this.decisionCouncil.review({
-            signal,
-            quality,
-            riskState: state,
-            config: this.config,
-            marketIntelligence,
-            microstructure,
-            walletIntelligence
-          });
-          const risk = this.riskAgent.decide(signal, quality, state, {
-            marketIntelligence,
-            microstructure,
-            walletIntelligence,
-            debate,
-            sourceScores: this.sourceScoreAudit(signal, signalState.scores)
-          });
-          if (risk.decision === "APPROVE" || risk.decision === "REDUCE_SIZE") {
-            const cooldownMs = this.config.stopCooldownMs ?? 0;
-            if (this.db.isMarketInStopCooldown(signal.marketId, signal.tokenId, cooldownMs)) {
-              result.rejected += 1;
-              rejectedReasons.set("stop-out cooldown active", (rejectedReasons.get("stop-out cooldown active") ?? 0) + 1);
-              continue;
-            }
-            result.approved += 1;
-            await this.telegram.sendApproved({
-              outcome: signal.outcome,
-              question: market.question,
-              price: signal.limitPrice,
-              size: risk.positionSize,
-              confidence: signal.confidence
-            });
-            if (options.placePaperOrders) await this.placeAndSimulate(signal, risk, books);
-          } else {
-            result.rejected += 1;
-            if (signal.decision === "TRADE_CANDIDATE") {
-              rejectedReasons.set(risk.reason, (rejectedReasons.get(risk.reason) ?? 0) + 1);
-            }
+      for (const { market, books, signal, priority } of ranked.selected) {
+        if (signal.strategyId?.startsWith("weather_") && !this.db.markWeatherOpportunitySelected(signal.id)) {
+          this.rejectDuplicateStrategyEvent(signal, result, rejectedReasons);
+          continue;
+        }
+        if (signal.strategyId === CRYPTO_THRESHOLD_STRATEGY_ID || signal.strategyId === MACRO_CPI_STRATEGY_ID) {
+          if (!this.db.markStrategyOpportunitySelected(signal.id)) {
+            this.rejectDuplicateStrategyEvent(signal, result, rejectedReasons);
+            continue;
           }
         }
+        const microstructure = this.microstructureAgent.review(market, books, this.config);
+        const qualityConfig = this.marketQualityConfigForSignal(signal);
+        const qualityMarket = signal.resolutionTimestamp
+          ? { ...market, endDate: new Date(signal.resolutionTimestamp).toISOString() }
+          : market;
+        const quality = applyMicrostructureToQuality(evaluateMarketQuality(qualityMarket, books, qualityConfig), microstructure);
+        const walletIntelligence = this.walletIntelligenceAgent.reviewSignal(signal, signalState.scores, signalState.allTrades);
+        const marketIntelligence = this.marketIntelligenceAgent.review({
+          market,
+          signal,
+          books,
+          scores: signalState.scores,
+          walletIntelligence
+        });
+        const state = this.riskState();
+        const debate = this.decisionCouncil.review({
+          signal,
+          quality,
+          riskState: state,
+          config: this.config,
+          marketIntelligence,
+          microstructure,
+          walletIntelligence
+        });
+        const risk = this.riskAgent.decide(signal, quality, state, {
+          marketIntelligence,
+          microstructure,
+          walletIntelligence,
+          debate,
+          sourceScores: this.sourceScoreAudit(signal, signalState.scores)
+        });
+        if (risk.decision === "APPROVE" || risk.decision === "REDUCE_SIZE") {
+          if (this.config.newEntriesEnabled === false) {
+            this.rejectApprovedSignal(signal, risk, "new paper entries disabled by audit gate", result, rejectedReasons);
+            continue;
+          }
+          const cooldownMs = this.config.stopCooldownMs ?? 0;
+          if (this.db.isMarketInStopCooldown(signal.marketId, signal.tokenId, cooldownMs)) {
+            this.rejectApprovedSignal(signal, risk, "stop-out cooldown active", result, rejectedReasons);
+            continue;
+          }
+          const entryCooldownMs = this.config.marketEntryCooldownMs ?? 0;
+          if (this.db.isMarketEntryInCooldown(signal.marketId, signal.tokenId, entryCooldownMs)) {
+            this.rejectApprovedSignal(signal, risk, "market/outcome entry cooldown active", result, rejectedReasons);
+            continue;
+          }
+          if (this.db.hasOpenPosition(signal.marketId, signal.tokenId, risk.profile)) {
+            this.rejectApprovedSignal(signal, risk, "position already open for market/outcome/profile", result, rejectedReasons);
+            continue;
+          }
+          const sourceCooldownMs = this.config.sourceEntryCooldownMs ?? 0;
+          if (this.db.isSourceEntryInCooldown(signal, risk.profile, sourceCooldownMs)) {
+            this.rejectApprovedSignal(signal, risk, "source/outcome entry cooldown active", result, rejectedReasons);
+            continue;
+          }
+          result.approved += 1;
+          await this.telegram.sendApproved({
+            outcome: signal.outcome,
+            question: market.question,
+            price: signal.limitPrice,
+            size: risk.positionSize,
+            confidence: signal.confidence
+          });
+          this.db.log("INFO", "globally ranked candidate approved", {
+            signalId: signal.id,
+            priority,
+            strategyEventKey: signal.strategyEventKey,
+            policyVersion: signal.policyVersion
+          });
+          if (options.placePaperOrders) await this.placeAndSimulate(signal, risk, books);
+        } else {
+          result.rejected += 1;
+          rejectedReasons.set(risk.reason, (rejectedReasons.get(risk.reason) ?? 0) + 1);
+        }
       }
+      this.signalAgent.flushSignalDiagnostics();
 
       if (options.placePaperOrders && rejectedReasons.size > 0) {
         const exposure = this.db.getExposureHealthReport(this.config.maxOpenExposure, this.config.bankroll, this.config.reserveCashPct);
@@ -263,6 +500,8 @@ class PolymarketPaperBot {
       });
 
       if (options.placePaperOrders) {
+        this.executionResearch.tick();
+        this.maybeLogExecutionResearchSummary();
         await this.monitorOpenPositions();
         await this.maybeSendBankrollSummary();
       }
@@ -273,7 +512,94 @@ class PolymarketPaperBot {
     } catch (error) {
       this.handleError(error);
       return result;
+    } finally {
+      this.cycleRunning = false;
     }
+  }
+
+  async stop(): Promise<void> {
+    this.ws.stop();
+    this.cryptoReferenceWs.stop();
+    await this.marketTape.close();
+    this.db.close();
+  }
+
+  private maybeLogExecutionResearchSummary(now = Date.now()): void {
+    if (now - this.lastExecutionResearchSummaryAt < 15 * 60_000) return;
+    this.lastExecutionResearchSummaryAt = now;
+    this.db.log("INFO", "execution research summary", {
+      ...this.executionResearch.getSummary(),
+      tape: this.marketTape.getStats(),
+      policies: Object.fromEntries(EXECUTION_RESEARCH_STRATEGIES
+        .map((strategy) => [strategy, executionPolicyVersion(this.config, strategy)]))
+    });
+  }
+
+  private async loadCompleteNegativeRiskGraphs(seed: ExecutionResearchUniverseEntry[]): Promise<MarketSnapshot[][]> {
+    if (this.config.executionResearchEnabled === false) return [];
+    const now = Date.now();
+    const eventIds = [...new Set(seed
+      .filter((entry) => entry.market.negRisk && !entry.market.negRiskAugmented && entry.market.eventId)
+      .map((entry) => entry.market.eventId!))]
+      .slice(0, 6);
+    return Promise.all(eventIds.map(async (eventId) => {
+      const cached = this.executionEventGraphCache.get(eventId);
+      const cacheTtl = cached?.markets.length ? 15 * 60_000 : 60_000;
+      if (cached && now - cached.refreshedAt < cacheTtl) return cached.markets;
+      const markets = await this.provider.getEventMarkets(eventId);
+      this.executionEventGraphCache.set(eventId, { markets, refreshedAt: now });
+      return markets;
+    }));
+  }
+
+  private rejectApprovedSignal(
+    signal: TradeSignal,
+    risk: ReturnType<RiskMitigationAgent["decide"]>,
+    reason: string,
+    result: CycleResult,
+    rejectedReasons: Map<string, number>
+  ): void {
+    result.rejected += 1;
+    rejectedReasons.set(reason, (rejectedReasons.get(reason) ?? 0) + 1);
+    this.db.saveRiskDecision({
+      decision: "REJECT",
+      positionSize: 0,
+      reason,
+      profile: risk.profile,
+      confidence: signal.confidence,
+      riskState: risk.riskState
+    }, {
+      signalId: signal.id,
+      marketId: signal.marketId,
+      outcome: signal.outcome,
+      details: {
+        entryPrice: signal.limitPrice,
+        sourceWalletCount: signal.alignedWallets.length,
+        riskReasonAtApproval: risk.reason
+      }
+    });
+  }
+
+  private rejectDuplicateStrategyEvent(
+    signal: TradeSignal,
+    result: CycleResult,
+    rejectedReasons: Map<string, number>
+  ): void {
+    const reason = `strategy event already has an immutable selection: ${signal.strategyEventKey ?? signal.marketId}`;
+    result.rejected += 1;
+    rejectedReasons.set(reason, (rejectedReasons.get(reason) ?? 0) + 1);
+    this.db.saveRiskDecision({
+      decision: "REJECT",
+      positionSize: 0,
+      reason,
+      confidence: signal.confidence,
+      shadow: true
+    }, {
+      signalId: signal.id,
+      marketId: signal.marketId,
+      outcome: signal.outcome,
+      details: { strategyEventKey: signal.strategyEventKey }
+    });
   }
 
   private sourceScoreAudit(signal: TradeSignal, scores: WalletScore[]): NonNullable<IntelligenceReviewContext["sourceScores"]> {
@@ -288,10 +614,47 @@ class PolymarketPaperBot {
         shadowPnl: score.shadowPnl,
         shadowSimulated: score.shadowSimulated,
         shadowRealized: score.shadowRealized,
+        sourceSellRealizedRatio: score.sourceSellRealizedRatio,
+        liveExecutableShadowPnl: score.liveExecutableShadowPnl,
+        liveExecutableShadowAvgReturnPct: score.liveExecutableShadowAvgReturnPct,
+        liveExecutableShadowSimulated: score.liveExecutableShadowSimulated,
         categoryConsistencyScore: score.categoryConsistencyScore,
         sampleConfidence: score.sampleConfidence,
         flags: score.flags
       }));
+  }
+
+  private marketQualityConfigForSignal(signal: TradeSignal): BotConfig {
+    if (signal.signalOrigin === "INDEPENDENT_MODEL" && signal.strategyId?.startsWith("weather_")) {
+      return {
+        ...this.config,
+        minTimeToResolutionHours: this.config.weatherMinTimeToResolutionHours ?? 2,
+        maxTimeToResolutionHours: Math.min(this.config.maxTimeToResolutionHours, 7 * 24)
+      };
+    }
+    if (signal.signalOrigin === "INDEPENDENT_MODEL" && signal.strategyId === CRYPTO_THRESHOLD_STRATEGY_ID) {
+      return {
+        ...this.config,
+        minTimeToResolutionHours: this.config.cryptoThresholdMinTimeToResolutionHours ?? 2,
+        maxTimeToResolutionHours: this.config.cryptoThresholdMaxTimeToResolutionHours ?? 36
+      };
+    }
+    if (signal.signalOrigin === "INDEPENDENT_MODEL" && signal.strategyId === MACRO_CPI_STRATEGY_ID) {
+      return {
+        ...this.config,
+        minTimeToResolutionHours: this.config.macroCpiMinTimeToReleaseHours ?? 2,
+        maxTimeToResolutionHours: this.config.macroCpiMaxTimeToReleaseHours ?? 168
+      };
+    }
+    if (!this.isPaperExplorationSignal(signal)) return this.config;
+    return {
+      ...this.config,
+      maxTimeToResolutionHours: this.config.paperExplorationMaxTimeToResolutionHours ?? this.config.maxTimeToResolutionHours
+    };
+  }
+
+  private isPaperExplorationSignal(signal: TradeSignal): boolean {
+    return this.config.paperMode && signal.reason.startsWith("paper exploration:");
   }
 
   private async getBooksForMarket(market: MarketSnapshot): Promise<OrderBookSnapshot[]> {
@@ -299,28 +662,36 @@ class PolymarketPaperBot {
     for (const tokenId of market.clobTokenIds) {
       const cached = this.orderBooks.get(tokenId);
       if (cached?.bestBid !== undefined && cached.bestAsk !== undefined && cached.bids.length > 0 && cached.asks.length > 0) {
-        books.push(cached);
+        const hydrated = await this.withTickSize(cached);
+        this.orderBooks.set(tokenId, hydrated);
+        books.push(hydrated);
         continue;
       }
       const book = await this.provider.getOrderBook(tokenId, market.id);
       if (book) {
-        this.orderBooks.set(tokenId, book);
-        this.db.saveOrderBook(book);
-        books.push(book);
+        const hydrated = await this.withTickSize(book);
+        this.orderBooks.set(tokenId, hydrated);
+        this.db.saveOrderBook(hydrated);
+        books.push(hydrated);
       }
     }
     return books;
   }
 
   private async placeAndSimulate(signal: Parameters<PaperExecutionEngine["createOrder"]>[0], risk: Parameters<PaperExecutionEngine["createOrder"]>[1], books: OrderBookSnapshot[]): Promise<void> {
-    const order = this.executor.createOrder(signal, risk, this.config);
-    const book = books.find((candidate) => candidate.tokenId === order.tokenId);
+    const book = books.find((candidate) => candidate.tokenId === signal.tokenId);
+    const market = this.db.getMarketById(signal.marketId);
+    const feeRate = market?.feesEnabled === false
+      ? 0
+      : market?.takerFeeRate ?? this.config.liveExecutionFeeRatePct ?? 0;
+    const order = this.executor.createOrder(signal, risk, this.config, book?.tickSize, feeRate);
     if (!book) return;
     const simulated = this.executor.simulate(order, book);
     if (simulated.order.status === "OPEN" || simulated.order.status === "PARTIAL") this.openOrders.set(simulated.order.id, simulated.order);
     else this.openOrders.delete(simulated.order.id);
     this.db.savePaperOrder(simulated.order);
     if (simulated.fill) this.db.saveFill(simulated.fill);
+    this.db.recordPaperEntryParity(signal, simulated.order, simulated.fill, simulated.position);
     if (simulated.position) {
       const position = this.db.savePaperEntry(simulated.position);
       const balance = this.paperBalanceTrail();
@@ -341,6 +712,9 @@ class PolymarketPaperBot {
   }
 
   private async monitorOpenPositions(): Promise<void> {
+    this.expireStaleOrders();
+    await this.refreshOpenPositionSourceTrades();
+    await this.refreshOpenPositionMarkets();
     await this.refreshOpenPositionBooks();
     const updates = this.overseerAgent.monitor(this.orderBooks);
     if (updates.length > 0) {
@@ -369,18 +743,101 @@ class PolymarketPaperBot {
         this.exportPaperLedger();
       }
     }
+    this.logParityScorecard();
+  }
+
+  private async refreshOpenPositionMarkets(): Promise<void> {
+    const marketIds = [...new Set(this.db.getOpenPositions().map((position) => position.marketId))];
+    for (const marketId of marketIds) {
+      try {
+        const market = await this.provider.getMarketById(marketId);
+        if (market) this.db.saveMarket(market);
+      } catch (error) {
+        this.db.log("WARN", "open-position market refresh failed", { marketId, error: String(error) });
+      }
+    }
+  }
+
+  private async refreshWeatherTournamentSettlements(): Promise<void> {
+    const marketIds = this.db.getWeatherTournamentSettlementMarketIds(WEATHER_TOURNAMENT_VERSION, Date.now(), 6);
+    await Promise.all(marketIds.map(async (marketId) => {
+      try {
+        const market = await this.provider.getMarketById(marketId);
+        if (market) this.db.saveMarket(market);
+      } catch (error) {
+        this.db.log("WARN", "weather tournament settlement refresh failed", { marketId, error: String(error) });
+      }
+    }));
   }
 
   private async refreshOpenPositionBooks(): Promise<void> {
     for (const position of this.db.getOpenPositions()) {
       const cached = this.orderBooks.get(position.tokenId);
-      const stale = !cached || Date.now() - cached.timestamp > 60_000;
+      const stale = !cached || Date.now() - cached.timestamp > (this.config.maxOrderBookAgeMs ?? 60_000);
       if (!stale && cached.bids.length > 0 && cached.asks.length > 0) continue;
       const book = await this.provider.getOrderBook(position.tokenId, position.marketId);
       if (!book) continue;
-      this.orderBooks.set(position.tokenId, book);
-      this.db.saveOrderBook(book);
+      const hydrated = await this.withTickSize(book);
+      this.orderBooks.set(position.tokenId, hydrated);
+      this.db.saveOrderBook(hydrated);
     }
+  }
+
+  private async refreshOpenPositionSourceTrades(): Promise<void> {
+    if (this.config.sourceExitEnabled === false || this.config.sourceExitPollingEnabled === false) return;
+    const limit = this.config.sourceExitWalletTradeLimit ?? 80;
+    const minIntervalMs = this.config.sourceExitPollIntervalMs ?? 30_000;
+    const now = Date.now();
+    const wallets = new Set<string>();
+    for (const item of this.db.getOpenPositionSourceWallets()) {
+      for (const wallet of item.wallets) {
+        const lastPoll = this.sourceExitPolls.get(wallet) ?? 0;
+        if (now - lastPoll >= minIntervalMs) wallets.add(wallet);
+      }
+    }
+    if (wallets.size === 0) return;
+    let fetched = 0;
+    let inserted = 0;
+    for (const wallet of wallets) {
+      try {
+        const trades = await this.provider.getWalletTrades(wallet, limit);
+        fetched += trades.length;
+        inserted += this.db.saveWalletTrades(trades);
+        this.sourceExitPolls.set(wallet, now);
+      } catch (error) {
+        this.db.log("WARN", "source exit wallet refresh failed", { wallet, error: String(error) });
+      }
+    }
+    this.events.write({
+      type: "source_exit.sources_refreshed",
+      agent: "Overseer Agent",
+      visibility: "PRIVATE",
+      message: "Refreshed source wallets for open-position exit detection.",
+      payload: { wallets: wallets.size, fetched, inserted, limit }
+    });
+  }
+
+  private async withTickSize(book: OrderBookSnapshot): Promise<OrderBookSnapshot> {
+    const cached = this.tickSizes.get(book.tokenId);
+    if (cached !== undefined) return { ...book, tickSize: book.tickSize ?? cached };
+    const tickSize = book.tickSize ?? await this.provider.getTickSize(book.tokenId);
+    if (tickSize !== undefined) this.tickSizes.set(book.tokenId, tickSize);
+    return { ...book, tickSize };
+  }
+
+  private logParityScorecard(): void {
+    const intervalMs = this.config.parityScorecardIntervalMs ?? 15 * 60_000;
+    if (Date.now() - this.lastParityScorecardAt < intervalMs) return;
+    this.lastParityScorecardAt = Date.now();
+    const scorecard = this.db.getParityScorecard(24);
+    this.db.log("INFO", "parity scorecard", scorecard);
+    this.events.write({
+      type: "parity.scorecard",
+      agent: "Overseer Agent",
+      visibility: "PUBLIC",
+      message: `Stored portfolio executable PnL $${scorecard.executableTotalPnl.toFixed(2)}; ${scorecard.filledOrders} filled order(s) in ${scorecard.lookbackHours}h.`,
+      payload: scorecard
+    });
   }
 
   private pruneRuntimeCaches(watchedTokenIds: string[]): void {
@@ -407,9 +864,22 @@ class PolymarketPaperBot {
     return {
       openExposure: this.db.getOpenExposure(),
       dailyPnl: this.db.getDailyRealizedPnl(),
-      lossStreak: 0,
-      tradesToday: 0
+      lossStreak: this.db.getLossStreak(),
+      tradesToday: this.db.getTradesToday()
     };
+  }
+
+  private expireStaleOrders(): void {
+    const expired = this.db.expireStalePaperOrders();
+    if (expired === 0) return;
+    this.db.log("INFO", "expired stale paper orders", { expired });
+    this.events.write({
+      type: "orders.expired",
+      agent: "Overseer Agent",
+      visibility: "PRIVATE",
+      message: `Expired ${expired} stale paper order(s).`,
+      payload: { expired }
+    });
   }
 
   private paperBalanceTrail(): { totalPnl: number; equity: number; availableCash: number } {
@@ -440,9 +910,40 @@ class PolymarketPaperBot {
     console.log(`Signals: ${result.signals}`);
     console.log(`Approved: ${result.approved}`);
     console.log(`Rejected: ${result.rejected}`);
-    const shadow = this.db.getShadowBacktestReport();
-    console.log(`Shadow simulated: ${shadow.simulated}`);
-    console.log(`Shadow PnL: $${shadow.pnl.toFixed(2)}`);
+    const shadow = this.db.getForwardShadowScorecard(this.config.performanceStartAt ?? 0);
+    console.log(`Forward live-executable shadow: ${shadow.liveExecutableSimulated ?? 0}`);
+    console.log(`Forward live-executable shadow PnL: $${(shadow.liveExecutablePnl ?? 0).toFixed(2)}`);
+    const weather = this.db.getWeatherForwardScorecard({
+      since: this.config.weatherForwardPolicyStartAt ?? 0,
+      policyVersion: this.config.weatherForwardPolicyVersion ?? "weather-unfrozen",
+      positionSizeUsd: this.config.independentModelFlatPositionSize ?? this.config.minPositionSize,
+      minResolvedTrades: this.config.weatherForwardMinResolvedTrades ?? 30,
+      minReturnPct: this.config.weatherForwardMinReturnPct ?? 0.05
+    });
+    console.log(`Weather forward selected/resolved: ${weather.uniqueCandidates}/${weather.resolved}`);
+    console.log(`Weather forward promotion: ${weather.promotionEligible ? "ELIGIBLE" : "NOT ELIGIBLE"} (${weather.promotionReason})`);
+    const crypto = this.db.getStrategyForwardScorecard({
+      strategyId: CRYPTO_THRESHOLD_STRATEGY_ID,
+      cluster: "CRYPTO_THRESHOLD",
+      since: this.config.cryptoThresholdForwardPolicyStartAt ?? 0,
+      policyVersion: this.config.cryptoThresholdForwardPolicyVersion ?? "crypto-unfrozen",
+      positionSizeUsd: this.config.independentModelFlatPositionSize ?? this.config.minPositionSize,
+      minResolvedTrades: this.config.cryptoThresholdForwardMinResolvedTrades ?? 30,
+      minReturnPct: this.config.cryptoThresholdForwardMinReturnPct ?? 0.05
+    });
+    console.log(`Crypto forward selected/resolved: ${crypto.uniqueCandidates}/${crypto.resolved}`);
+    console.log(`Crypto forward promotion: ${crypto.promotionEligible ? "ELIGIBLE" : "NOT ELIGIBLE"} (${crypto.promotionReason})`);
+    const macro = this.db.getStrategyForwardScorecard({
+      strategyId: MACRO_CPI_STRATEGY_ID,
+      cluster: "MACRO_RELEASE",
+      since: this.config.macroCpiForwardPolicyStartAt ?? 0,
+      policyVersion: this.config.macroCpiForwardPolicyVersion ?? "macro-cpi-unfrozen",
+      positionSizeUsd: this.config.independentModelFlatPositionSize ?? this.config.minPositionSize,
+      minResolvedTrades: this.config.macroCpiForwardMinResolvedTrades ?? 30,
+      minReturnPct: this.config.macroCpiForwardMinReturnPct ?? 0.05
+    });
+    console.log(`Macro CPI forward selected/resolved: ${macro.uniqueCandidates}/${macro.resolved}`);
+    console.log(`Macro CPI forward promotion: ${macro.promotionEligible ? "ELIGIBLE" : "NOT ELIGIBLE"} (${macro.promotionReason})`);
     if (result.scores.length === 0) {
       console.log("No enabled wallets. Add addresses to config/wallets.json to generate wallet-following signals.");
     } else {
@@ -840,6 +1341,10 @@ class PolymarketPaperBot {
     ].join("\n");
   }
 
+  private plainLiveReadinessReport(): string {
+    return formatPlainLiveReadinessReport(this.db.getLiveReadinessReport(this.config, 24), this.config);
+  }
+
   private telegramPause(): string {
     this.paused = true;
     this.db.log("WARN", "bot paused from Telegram");
@@ -944,7 +1449,32 @@ function escapeHtml(value: string): string {
     .replaceAll(">", "&gt;");
 }
 
+async function mapWithConcurrency<T, R>(items: T[], concurrency: number, mapper: (item: T) => Promise<R>): Promise<R[]> {
+  const output = new Array<R>(items.length);
+  let nextIndex = 0;
+  const workers = Array.from({ length: Math.min(Math.max(1, concurrency), Math.max(1, items.length)) }, async () => {
+    while (true) {
+      const index = nextIndex;
+      nextIndex += 1;
+      if (index >= items.length) return;
+      output[index] = await mapper(items[index]);
+    }
+  });
+  await Promise.all(workers);
+  return output;
+}
+
 const arg = process.argv[2];
-const mode = (arg === "dev" || arg === "performance" || arg === "shadow" ? arg : "scan") satisfies Mode;
+const mode = (arg === "dev" || arg === "performance" || arg === "shadow" || arg === "readiness" ? arg : "scan") satisfies Mode;
 const bot = new PolymarketPaperBot();
+if (mode === "dev") {
+  let stopping = false;
+  const shutdown = () => {
+    if (stopping) return;
+    stopping = true;
+    void bot.stop().finally(() => process.exit(0));
+  };
+  process.once("SIGTERM", shutdown);
+  process.once("SIGINT", shutdown);
+}
 await bot.start(mode);

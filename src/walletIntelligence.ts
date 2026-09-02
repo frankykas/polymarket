@@ -26,11 +26,31 @@ export function applyShadowPerformanceToScore(score: WalletScore, performance?: 
   if (!performance || performance.simulated === 0) return score;
   const impact = calculateShadowScoreImpact(performance);
   const flags = [...score.flags];
+  const realizedRatio = performance.simulated > 0 ? performance.realized / performance.simulated : 0;
+  const sourceSellRealizedRatio = performance.sourceSellRealizedRatio ?? 0;
+  const liveExecutableSimulated = performance.liveExecutableSimulated ?? 0;
+  const liveExecutablePnl = performance.liveExecutablePnl ?? 0;
+  const liveExecutableAvgReturnPct = performance.liveExecutableAvgReturnPct ?? 0;
+  const hasLiveExecutableStats = performance.liveExecutableSimulated !== undefined;
+  const hasSourceSellStats = performance.sourceSellRealizedRatio !== undefined;
+  const liveExecutableRatio = performance.simulated > 0 ? liveExecutableSimulated / performance.simulated : 0;
   if (performance.simulated < 10) flags.push("SHADOW_LOW_SAMPLE");
   if (performance.fallback / performance.simulated > 0.75) flags.push("SHADOW_MOSTLY_FALLBACK_MARKS");
+  if (hasSourceSellStats && sourceSellRealizedRatio < 0.35 && performance.simulated >= 20) flags.push("LOW_SOURCE_SELL_REALIZATION");
+  if (hasLiveExecutableStats && liveExecutableSimulated >= 10 && liveExecutablePnl <= 0) flags.push("LIVE_EXECUTABLE_SHADOW_NEGATIVE");
+  if (hasLiveExecutableStats && performance.simulated >= 20 && liveExecutableRatio < 0.2) flags.push("LOW_LIVE_EXECUTABLE_SHADOW_RATE");
   if (impact <= -6) flags.push("SHADOW_COPY_UNDERPERFORMS");
   if (impact >= 6) flags.push("SHADOW_COPY_OUTPERFORMS");
-  if (performance.simulated >= 20 && performance.pnl > 0 && performance.realized > 0 && performance.fallback / performance.simulated <= 0.6) {
+  if (
+    performance.simulated >= 20 &&
+    performance.realized >= 8 &&
+    realizedRatio >= 0.2 &&
+    (!hasSourceSellStats || sourceSellRealizedRatio >= 0.35) &&
+    (!hasLiveExecutableStats || (liveExecutableSimulated >= 8 && liveExecutablePnl > 0 && liveExecutableAvgReturnPct > 0.03)) &&
+    performance.realizedPnl > 0 &&
+    performance.realizedAvgReturnPct > 0 &&
+    performance.fallback / performance.simulated <= 0.5
+  ) {
     flags.push("SHADOW_PROVEN_COPYABLE");
   }
   if (performance.simulated >= 20 && performance.pnl <= 0) flags.push("SHADOW_NEGATIVE_PNL");
@@ -50,7 +70,13 @@ export function applyShadowPerformanceToScore(score: WalletScore, performance?: 
     shadowPnl: performance.pnl,
     shadowAvgReturnPct: performance.avgReturnPct,
     shadowWinRate: performance.winRate,
-    shadowScoreImpact: impact
+    shadowScoreImpact: impact,
+    sourceSellShadowRealized: performance.sourceSellRealized,
+    sourceSellRealizedRatio,
+    liveExecutableShadowSimulated: liveExecutableSimulated,
+    liveExecutableShadowPnl: liveExecutablePnl,
+    liveExecutableShadowAvgReturnPct: liveExecutableAvgReturnPct,
+    liveExecutableShadowWinRate: performance.liveExecutableWinRate ?? 0
   };
 }
 
@@ -59,6 +85,7 @@ export function applyPaperPerformanceToScore(score: WalletScore, performance?: P
   const flags = [...score.flags];
   if (performance.filledOrders < 10) flags.push("PAPER_LOW_SAMPLE");
   if (performance.scoreImpact <= -3) flags.push("PAPER_COPY_UNDERPERFORMS");
+  if (performance.filledOrders >= 3 && (performance.pnl <= -3 || performance.avgReturnPct <= -0.02)) flags.push("PAPER_COPY_UNDERPERFORMS");
   if (performance.scoreImpact >= 3) flags.push("PAPER_COPY_OUTPERFORMS");
   const adjustedScore = Math.round(clamp(score.score + performance.scoreImpact, 0, 100));
   const adjustedCopyability = score.copyabilityScore === undefined
@@ -69,7 +96,11 @@ export function applyPaperPerformanceToScore(score: WalletScore, performance?: P
     score: adjustedScore,
     copyabilityScore: adjustedCopyability,
     reliability: adjustedScore >= 70 && (score.sampleConfidence ?? 0) >= 0.65 ? "HIGH" : adjustedScore >= 55 ? "MEDIUM" : "LOW",
-    flags: uniqueFlags(flags)
+    flags: uniqueFlags(flags),
+    paperFilledOrders: performance.filledOrders,
+    paperPnl: performance.pnl,
+    paperAvgReturnPct: performance.avgReturnPct,
+    paperScoreImpact: performance.scoreImpact
   };
 }
 
@@ -279,6 +310,7 @@ export function scoreDiscoveredWallet(wallet: DiscoveredWallet, now = Date.now()
   const flags = [...wallet.flags];
   if (wallet.score < 60) flags.push("DISCOVERY_LOW_SCORE");
   if (wallet.sampleConfidence < 0.55) flags.push("WEAK_EVIDENCE");
+  const sellBuyRatio = Math.min(1, wallet.sellCount / Math.max(1, wallet.buyCount));
   return {
     wallet: wallet.address,
     label: "discovered",
@@ -292,8 +324,9 @@ export function scoreDiscoveredWallet(wallet: DiscoveredWallet, now = Date.now()
     resolvedWins: wallet.resolvedWins,
     resolvedLosses: wallet.resolvedLosses,
     resolvedWinRate: wallet.resolvedWinRate,
+    sourceSellRealizedRatio: sellBuyRatio,
     tradeCount: wallet.tradeCount,
-    recentTradeCount: 0,
+    recentTradeCount: wallet.tradeCount,
     reliability: wallet.copyabilityScore >= 70 && wallet.sampleConfidence >= 0.65 ? "HIGH" : wallet.copyabilityScore >= 55 ? "MEDIUM" : "LOW",
     flags,
     updatedAt: now
@@ -438,11 +471,25 @@ export function calculateShadowScoreImpact(performance: ShadowWalletPerformance)
   const sampleWeight = clamp(performance.simulated / 25, 0, 1);
   const realizedWeight = clamp(performance.realized / 10, 0, 1);
   const fallbackRatio = performance.simulated > 0 ? performance.fallback / performance.simulated : 0;
-  const markQuality = 1 - fallbackRatio * 0.6;
-  const allTradeReturn = clamp(performance.avgReturnPct / 0.08, -1, 1) * 9 * sampleWeight * markQuality;
-  const realizedReturn = clamp(performance.realizedAvgReturnPct / 0.1, -1, 1) * 9 * realizedWeight;
+  const markedRatio = performance.simulated > 0 ? performance.marked / performance.simulated : 0;
+  const sourceSellRatio = performance.sourceSellRealizedRatio ?? 0;
+  const liveExecutableSimulated = performance.liveExecutableSimulated ?? 0;
+  const liveExecutablePnl = performance.liveExecutablePnl ?? 0;
+  const liveExecutableAvgReturnPct = performance.liveExecutableAvgReturnPct ?? 0;
+  const liveExecutableWeight = clamp(liveExecutableSimulated / 12, 0, 1);
+  const markQuality = 1 - fallbackRatio * 0.8 - markedRatio * 0.25;
+  const allTradeReturn = clamp(performance.avgReturnPct / 0.08, -1, 1) * 5 * sampleWeight * markQuality;
+  const realizedReturn = clamp(performance.realizedAvgReturnPct / 0.1, -1, 1) * 13 * realizedWeight;
+  const realizedPnlTilt = clamp(performance.realizedPnl / 30, -1, 1) * 5 * realizedWeight;
+  const liveExecutableReturn = clamp(liveExecutableAvgReturnPct / 0.08, -1, 1) * 10 * liveExecutableWeight;
+  const liveExecutablePnlTilt = clamp(liveExecutablePnl / 25, -1, 1) * 5 * liveExecutableWeight;
+  const sourceSellTilt = clamp((sourceSellRatio - 0.35) / 0.35, -1, 1) * 5 * sampleWeight;
   const winRateTilt = clamp((performance.winRate - 0.5) / 0.35, -1, 1) * 5 * sampleWeight;
-  const raw = allTradeReturn + realizedReturn + winRateTilt;
+  const fallbackPenalty = fallbackRatio > 0.35 ? (fallbackRatio - 0.35) * 12 * sampleWeight : 0;
+  const staleMarkPenalty = markedRatio > 0.55 && performance.realizedAvgReturnPct <= 0 ? (markedRatio - 0.55) * 10 * sampleWeight : 0;
+  const liveExecutablePenalty = performance.simulated >= 20 && liveExecutableWeight < 0.35 ? (0.35 - liveExecutableWeight) * 12 * sampleWeight : 0;
+  const raw = allTradeReturn + realizedReturn + realizedPnlTilt + liveExecutableReturn + liveExecutablePnlTilt + sourceSellTilt + winRateTilt -
+    fallbackPenalty - staleMarkPenalty - liveExecutablePenalty;
   // Asymmetric: demote wallets that lose money when copied more than we promote winners.
   const shaped = raw < 0 ? raw * 1.4 : raw;
   return Math.round(clamp(shaped, -28, 20));
@@ -590,11 +637,28 @@ function normalizeOutcome(value: string): string {
 }
 
 export function inferMarketCategory(market: MarketSnapshot): MarketCategory {
-  const text = `${market.question} ${market.slug ?? ""}`.toLowerCase();
+  const raw = market.raw && typeof market.raw === "object" && !Array.isArray(market.raw)
+    ? market.raw as Record<string, unknown>
+    : {};
+  const events = Array.isArray(raw.events) ? raw.events as Array<Record<string, unknown>> : [];
+  const series = events.flatMap((event) => Array.isArray(event.series) ? event.series as Array<Record<string, unknown>> : []);
+  const metadataText = [
+    raw.sportsMarketType,
+    raw.gameStartTime,
+    raw.eventStartTime,
+    ...events.flatMap((event) => [event.slug, event.title, event.seriesSlug, event.gameId]),
+    ...series.flatMap((item) => [item.slug, item.title])
+  ].filter((value) => value !== undefined && value !== null).join(" ");
+  const text = `${market.question} ${market.slug ?? ""} ${metadataText}`.toLowerCase();
+  if (/\b(highest temperature|lowest temperature|weather|rainfall|snowfall|precipitation|hurricane|wind speed)\b/.test(text)) return "weather";
   if (/\b(election|president|senate|house|congress|trump|biden|poll|mayor|governor|democrat|republican|minister)\b/.test(text)) return "politics";
-  if (/\b(nba|nfl|mlb|nhl|ufc|soccer|football|tennis|golf|cricket|team|championship|super bowl|world cup)\b/.test(text)) return "sports";
+  if (
+    raw.sportsMarketType !== undefined || raw.gameStartTime !== undefined ||
+    /\b(nba|wnba|nfl|mlb|nhl|ufc|mma|soccer|football|tennis|golf|cricket|baseball|basketball|hockey|esports|dota\s?2|cs2|valorant|league of legends|team|championship|super bowl|world cup|goalscorer|spread|moneyline)\b/.test(text) ||
+    /\bvs\.?\b/.test(text)
+  ) return "sports";
   if (/\b(bitcoin|btc|ethereum|eth|solana|sol|xrp|crypto|token|coin|binance)\b/.test(text)) return "crypto";
-  if (/\b(fed|inflation|cpi|rates|gdp|jobs|unemployment|recession|tariff|oil|gold)\b/.test(text)) return "macro";
+  if (/\b(fed|inflation|cpi|rates|gdp|jobs|unemployment|recession|tariff|oil|gold|s&p|s and p|dow|nasdaq)\b/.test(text)) return "macro";
   if (/\b(tesla|apple|nvidia|meta|google|amazon|microsoft|stock|earnings|ipo)\b/.test(text)) return "company";
   if (/\b(oscar|grammy|movie|album|stream|youtube|tiktok|celebrity|music)\b/.test(text)) return "culture";
   return "other";

@@ -14,7 +14,7 @@ import { indexHtml } from "./view.js";
 const execFileAsync = promisify(execFile);
 const env = loadRuntimeEnv();
 const config = loadBotConfig();
-const db = new BotDatabase(env.dbPath);
+const db = new BotDatabase(env.dbPath, config.performanceStartAt);
 const port = Number(process.env.DASHBOARD_PORT || 8787);
 const publicDir = join(process.cwd(), "public");
 let dashboardCache: { value: DashboardReadModel; createdAt: number } | undefined;

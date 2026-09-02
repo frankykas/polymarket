@@ -1,0 +1,14 @@
+[Unit]
+Description=PMarke point-in-time strategy research collection
+After=network-online.target pmarke-bot.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/pmarke
+ExecStart=/usr/bin/npm run macro:collect
+ExecStart=/usr/bin/npm run execution:cross-sensitivity
+ExecStart=/usr/bin/npm run launch:readiness
+Nice=10
+CPUQuota=50%
+TimeoutStartSec=20min

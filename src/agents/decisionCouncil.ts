@@ -95,7 +95,7 @@ function microstructureVote(context: IntelligenceReviewContext["microstructure"]
 
 function walletIntelligenceVote(context: IntelligenceReviewContext["walletIntelligence"]): AgentVote {
   if (!context) return { agent: "Wallet Intelligence Agent", vote: "WATCH", score: 50, reason: "wallet independence context not available" };
-  const vote = context.state === "INDEPENDENT" && context.score >= 65 ? "APPROVE" : context.state === "UNKNOWN" || context.score < 45 ? "REJECT" : "WATCH";
+  const vote = (context.state === "INDEPENDENT" || context.state === "MODEL_INDEPENDENT") && context.score >= 65 ? "APPROVE" : context.state === "UNKNOWN" || context.score < 45 ? "REJECT" : "WATCH";
   return {
     agent: "Wallet Intelligence Agent",
     vote,
